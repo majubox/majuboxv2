@@ -263,7 +263,7 @@ async function startServer() {
           });
           if (checkRes.data.status === 'approved') {
              // Mark as paid and extend license
-             await db.run("UPDATE payments SET status = 'paid', paid_at = ? WHERE id = ?", [new Date().toISOString(), payment_id_to_verify]);
+             await db.run("UPDATE payments SET status = 'paid', paid_at = ? WHERE id = ? OR mp_id = ?", [new Date().toISOString(), payment_id_to_verify, payment_id_to_verify.toString()]);
              expDate = new Date();
              expDate.setDate(expDate.getDate() + 30);
              await db.run("UPDATE machines SET license_exp = ? WHERE id = ?", [expDate.toISOString(), machine.id]);
@@ -477,6 +477,14 @@ async function startServer() {
 
   app.post("/api/admin/genres", async (req, res) => {
     const { name, cover_url } = req.body;
+    if (!name) return res.status(400).json({ ok: false, error: "Nome obrigatório" });
+
+    // Check if exists
+    const existing = await db.get("SELECT id FROM genres WHERE LOWER(name) = LOWER(?)", [name]);
+    if (existing) {
+       return res.json({ ok: true, id: existing.id, message: "Gênero já existe" });
+    }
+
     const result = await db.run("INSERT INTO genres (name, cover_url) VALUES (?, ?)", [name, cover_url]);
     res.json({ ok: true, id: result.lastID });
   });

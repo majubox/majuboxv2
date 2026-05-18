@@ -540,6 +540,21 @@ export default function App() {
     }
   }, [token, syncWithServer, isConfigLoaded]);
 
+  // Carregar gêneros extras ao entrar no Admin para garantir que estão atualizados
+  useEffect(() => {
+    if (screen === 'admin' && token) {
+      const fetchAdminGenres = async () => {
+        try {
+          const res = await api.post(getFullUrl('/api/machine/check'), { token, hwid });
+          if (res.data?.ok && res.data.genres) {
+            setGenres(res.data.genres);
+          }
+        } catch (e) {}
+      };
+      fetchAdminGenres();
+    }
+  }, [screen, token, hwid, api]);
+
   const handleLogoClick = () => {
     logDebug("Logo tapped");
     setTapCount(prev => {
@@ -1517,8 +1532,13 @@ export default function App() {
                    </div>
                    <div className="grid grid-cols-2 gap-3">
                       <div className="space-y-1">
-                        <label className="text-[10px] font-bold text-zinc-600 uppercase ml-1">Gênero ID</label>
-                        <input id="yt-genre-input" type="number" placeholder="1" className="w-full bg-black/40 border border-zinc-800 p-3 rounded-xl text-sm" />
+                        <label className="text-[10px] font-bold text-zinc-600 uppercase ml-1">Gênero</label>
+                        <select id="yt-genre-input" className="w-full bg-black/40 border border-zinc-800 p-3 rounded-xl text-sm text-white outline-none focus:border-red-500">
+                          <option value="">Selecione...</option>
+                          {genres.map(g => (
+                            <option key={g.id} value={g.id}>{g.name}</option>
+                          ))}
+                        </select>
                       </div>
                       <div className="space-y-1">
                         <label className="text-[10px] font-bold text-zinc-600 uppercase ml-1">Max Vídeos</label>
@@ -1551,6 +1571,39 @@ export default function App() {
                     IMPORTAR AGORA
                    </button>
                    <p className="text-[9px] text-zinc-600 italic leading-relaxed">Isso criará um novo DVD no gênero selecionado com os vídeos do canal (limite 7 min).</p>
+                </div>
+              </section>
+
+              <section className="space-y-4 pt-4 border-t border-zinc-800">
+                <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest pl-1">Gerenciar Gêneros</h3>
+                <div className="bg-zinc-900/50 p-6 rounded-3xl border border-zinc-800 space-y-6">
+                   {/* Add Genre */}
+                   <div className="space-y-3">
+                      <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">Adicionar Novo Gênero</p>
+                      <div className="flex gap-2">
+                        <input id="manual-genre-name" type="text" placeholder="Nome do Gênero" className="flex-1 bg-black/40 border border-zinc-800 p-3 rounded-xl text-sm" />
+                        <button 
+                          onClick={async () => {
+                            const name = (document.getElementById('manual-genre-name') as HTMLInputElement).value;
+                            if (!name) return;
+                            try {
+                              const res = await api.post(getFullUrl('/api/admin/genres'), { name });
+                              if (res.data.message === "Gênero já existe") {
+                                alert("Este gênero já está cadastrado no servidor.");
+                              } else {
+                                alert("Gênero adicionado com sucesso!");
+                              }
+                              syncWithServer();
+                              (document.getElementById('manual-genre-name') as HTMLInputElement).value = "";
+                            } catch (e) {}
+                          }}
+                          className="bg-brand-red text-white px-6 rounded-xl font-bold text-xs"
+                        >
+                          ADICIONAR
+                        </button>
+                      </div>
+                      <p className="text-[9px] text-zinc-600 italic">As capas dos gêneros são gerenciadas pelo administrador no servidor.</p>
+                   </div>
                 </div>
               </section>
 
