@@ -540,20 +540,23 @@ export default function App() {
     }
   }, [token, syncWithServer, isConfigLoaded]);
 
-  // Carregar gêneros extras ao entrar no Admin para garantir que estão atualizados
+  // Carregar gêneros ao entrar no Admin
   useEffect(() => {
-    if (screen === 'admin' && token) {
+    if (screen === 'admin') {
       const fetchAdminGenres = async () => {
         try {
-          const res = await api.post(getFullUrl('/api/machine/check'), { token, hwid });
-          if (res.data?.ok && res.data.genres) {
-            setGenres(res.data.genres);
+          const res = await api.get(getFullUrl('/api/admin/genres'));
+          if (Array.isArray(res.data)) {
+            setGenres(res.data);
           }
-        } catch (e) {}
+        } catch (e) {
+          // Fallback to sync if GET fails
+          if (token) syncWithServer();
+        }
       };
       fetchAdminGenres();
     }
-  }, [screen, token, hwid, api]);
+  }, [screen, api, token, syncWithServer]);
 
   const handleLogoClick = () => {
     logDebug("Logo tapped");
