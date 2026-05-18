@@ -1,0 +1,25 @@
+{
+	"appId": "com.majubox.app",
+	"appName": "MajuBox",
+	"webDir": "dist",
+	"server": {
+		"androidScheme": "https",
+		"cleartext": true
+	},
+	"android": {
+		"allowMixedContent": true,
+		"webContentsDebuggingEnabled": true
+	},
+	"plugins": {
+		"CapacitorHttp": {
+			"enabled": true
+		},
+		"SplashScreen": {
+			"launchShowDuration": 1200,
+			"backgroundColor": "#0a0a0c"
+		}
+	},
+	"packageClassList": [
+		"FilesystemPlugin"
+	]
+}
