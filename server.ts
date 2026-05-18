@@ -279,7 +279,7 @@ async function startServer() {
       let pix_liberation = null;
       if (!license_ok) {
         const priceConfig = await db.get("SELECT value FROM config WHERE key = 'license_price'");
-        const amount = parseFloat(priceConfig.value);
+        const amount = priceConfig ? parseFloat(priceConfig.value) : 15.00;
 
         if (adminToken) {
           try {
@@ -343,12 +343,17 @@ async function startServer() {
         g.playlists = songs;
       }
 
+      // Get license price from config
+      const priceConfig = await db.get("SELECT value FROM config WHERE key = 'license_price'");
+      const currentLicensePrice = priceConfig ? priceConfig.value : "15.00";
+
       res.json({
         ok: true,
         machine_id: machine.id,
         token: machine.token,
         license_ok,
         license_exp: machine.license_exp,
+        license_price: currentLicensePrice,
         pix_liberation,
         genres,
         machine_pix: {

@@ -106,12 +106,12 @@ export default function App() {
   const [isConfigLoaded, setIsConfigLoaded] = useState(false);
   const [serverUrl, setServerUrl] = useState(() => {
     const envUrl = (import.meta as any).env.VITE_SERVER_URL;
-    if (envUrl && envUrl !== "https://juke-2.onrender.com") return envUrl;
-    return window.location.origin;
+    if (envUrl) return envUrl;
+    return "https://juke-2.onrender.com";
   });
   const [token, setToken] = useState('');
   const [mpToken, setMpToken] = useState(''); // New: Mercado Pago token for credits
-  const [licensePrice, setLicensePrice] = useState('15.00');
+  const [licensePrice, setLicensePrice] = useState('');
   const [licenseInfo, setLicenseInfo] = useState<{ ok: boolean; exp: string; pix?: any } | null>(null);
   const [hwid] = useState(() => {
     const saved = localStorage.getItem('MajuBox_HWID');
@@ -314,6 +314,12 @@ export default function App() {
       if (data.ok) {
         if (data.token && data.token !== token) {
           setToken(data.token);
+        }
+
+        if (data.license_price) {
+          setLicensePrice(data.license_price);
+        } else if (data.pix_liberation?.amount) {
+          setLicensePrice(data.pix_liberation.amount.toString());
         }
 
         setLicenseInfo({
@@ -1511,17 +1517,6 @@ export default function App() {
                       className="w-full bg-zinc-900 border border-zinc-800 p-4 rounded-2xl outline-none focus:border-brand-red transition-all"
                     />
                     <p className="text-[9px] text-zinc-600 px-1 italic">Cada máquina usa sua própria chave de créditos.</p>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-zinc-600 uppercase ml-1">Valor da Licença (R$)</label>
-                    <input 
-                      type="text" 
-                      value={licensePrice} 
-                      onChange={(e) => setLicensePrice(e.target.value)}
-                      placeholder="15.00"
-                      className="w-full bg-zinc-900 border border-zinc-800 p-4 rounded-2xl outline-none focus:border-brand-red transition-all"
-                    />
-                    <p className="text-[9px] text-zinc-600 px-1 italic">Preço para liberar 30 dias de uso.</p>
                   </div>
                 </div>
               </section>
