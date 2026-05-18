@@ -221,6 +221,63 @@ async function startServer() {
   app.use(cors());
   app.use(express.json());
 
+  // --- Proxy Middleware ---
+  // This allows the browser (Preview) to bypass CORS by using this local server as a bridge.
+  app.use(async (req, res, next) => {
+    const serverUrl = req.body?.serverUrl || req.query?.serverUrl;
+    const host = req.get('host') || '';
+    
+    // Check if we should proxy
+    const shouldProxy = serverUrl && 
+                       typeof serverUrl === 'string' && 
+                       serverUrl.startsWith('http') && 
+                       !serverUrl.includes(host);
+
+    if (shouldProxy) {
+      const cleanServerUrl = (serverUrl as string).replace(/\/$/, '');
+      const targetUrl = `${cleanServerUrl}${req.path}`;
+      
+      try {
+        console.log(`[PROXY] ${req.method} ${req.path} -> ${targetUrl}`);
+        
+        const response = await axios({
+          method: req.method,
+          url: targetUrl,
+          data: req.method !== 'GET' ? { ...req.body, serverUrl: undefined } : undefined,
+          params: { ...req.query, serverUrl: undefined },
+          timeout: 20000,
+          headers: { 
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'X-Proxied-By': 'MajuBox-Proxy'
+          }
+        });
+        
+        res.set('X-Maju-Proxied', 'true');
+        return res.json(response.data);
+      } catch (error: any) {
+        const status = error.response?.status || 500;
+        let errorData = error.response?.data || { ok: false, error: error.message };
+        
+        console.error(`[PROXY ERROR] ${req.method} ${req.path} -> ${targetUrl} | Status: ${status} | Error: ${error.message}`);
+        
+        res.set('X-Maju-Proxy-Error', error.message);
+        res.set('X-Maju-Target-Url', targetUrl);
+        
+        if (status === 404) {
+          errorData = { 
+            ok: false, 
+            error: `O servidor em ${serverUrl} retornou 404 (Não Encontrado) para a rota ${req.path}. Verifique se a URL está correta.`,
+            targetUrl
+          };
+        }
+
+        return res.status(status).json(errorData);
+      }
+    }
+    next();
+  });
+
   // --- API Routes (Machine) ---
 
   const handleMachineCheck = async (req, res) => {
@@ -714,4 +771,16 @@ async function startServer() {
   });
 }
 
-startServer();
+process.on('uncaughtException', (err) => {
+  console.error('FATAL UNCAUGHT EXCEPTION:', err);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('FATAL UNHANDLED REJECTION:', reason);
+});
+
+startServer().catch(err => {
+  console.error('SERVER STARTUP ERROR:', err);
+  process.exit(1);
+});

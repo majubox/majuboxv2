@@ -178,27 +178,70 @@ export default function App() {
           headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }
         });
       }
+    },
+    get: async (path: string) => {
+      if (Capacitor.isNativePlatform()) {
+        const base = serverUrl.startsWith('http') ? serverUrl : `https://${serverUrl}`;
+        const cleanBase = base.replace(/\/$/, '');
+        let finalUrl = path.startsWith('http') ? path : `${cleanBase}${path.startsWith('/') ? path : '/' + path}`;
+        
+        logDebug(`CapacitorHttp GET: ${finalUrl}`);
+        const options = {
+          url: finalUrl,
+          connectTimeout: 15000,
+          readTimeout: 15000
+        };
+        const response = await CapacitorHttp.get(options);
+        return response;
+      } else {
+        logDebug(`Axios GET (Browser Proxy): ${path}`);
+        // We pass serverUrl in a header for GET requests
+        return await axios.get(path, { 
+          params: { serverUrl },
+          timeout: 15000,
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }
+        });
+      }
+    },
+    delete: async (path: string) => {
+      if (Capacitor.isNativePlatform()) {
+        const base = serverUrl.startsWith('http') ? serverUrl : `https://${serverUrl}`;
+        const cleanBase = base.replace(/\/$/, '');
+        let finalUrl = path.startsWith('http') ? path : `${cleanBase}${path.startsWith('/') ? path : '/' + path}`;
+        const options = { url: finalUrl };
+        return await CapacitorHttp.delete(options);
+      } else {
+        return await axios.delete(path, { 
+          params: { serverUrl },
+          timeout: 15000
+        });
+      }
+    },
+    put: async (path: string, data: any) => {
+      if (Capacitor.isNativePlatform()) {
+        const base = serverUrl.startsWith('http') ? serverUrl : `https://${serverUrl}`;
+        const cleanBase = base.replace(/\/$/, '');
+        let finalUrl = path.startsWith('http') ? path : `${cleanBase}${path.startsWith('/') ? path : '/' + path}`;
+        const options = { url: finalUrl, data, headers: { 'Content-Type': 'application/json' }};
+        return await CapacitorHttp.put(options);
+      } else {
+        return await axios.put(path, { ...data, serverUrl }, { timeout: 15000 });
+      }
     }
   }, [logDebug, serverUrl]);
 
   const getFullUrl = (path: string) => {
-    // If we are in the browser (Preview), we use the relative path for proxy routes
-    // so it hits our local Express server (server.ts) which acts as a proxy.
-    if (!Capacitor.isNativePlatform() && (path.startsWith('/api/proxy') || path.startsWith('/api/machine'))) {
-      return path;
-    }
-
+    // No Capacitor, sempre URL completa
     if (Capacitor.isNativePlatform()) {
       const base = serverUrl.startsWith('http') ? serverUrl : `https://${serverUrl}`;
       const cleanBase = base.replace(/\/$/, '');
-
-      if (path === '/api/machine/check') return `${cleanBase}/api/machine/check`;
-      if (path === '/api/machine/pix/create') return `${cleanBase}/api/machine/pix/create`;
-      if (path === '/api/machine/pix/status') return `${cleanBase}/api/machine/pix/status`;
-
-      if (path.startsWith('http')) return path;
       const cleanPath = path.startsWith('/') ? path : '/' + path;
       return `${cleanBase}${cleanPath}`;
+    }
+
+    // No Browser, as rotas /api/ passam pelo proxy local em server.ts
+    if (path.startsWith('/api/')) {
+      return path;
     }
 
     if (path.startsWith('http') || path.startsWith('data:')) return path;
@@ -291,16 +334,22 @@ export default function App() {
   const syncWithServer = useCallback(async () => {
     setIsLoading(true);
     setSyncError("");
+    logDebug(`Sincronizando com: ${serverUrl}`);
+
     try {
-      // 1. Get Config (Admin Only if needed, but here global)
-      const configRes = await api.get(getFullUrl("/api/admin/config"));
-      if (configRes.data.ok) {
-        setLicensePrice(configRes.data.license_price);
+      // 1. Tentar carregar preço da licença (Opcional, mas útil)
+      try {
+        const configRes = await api.get(getFullUrl("/api/admin/config"));
+        if (configRes.data && configRes.data.license_price) {
+          setLicensePrice(configRes.data.license_price);
+        }
+      } catch (e: any) {
+        logDebug(`Aviso: Falha ao pré-carregar config: ${e.message}`);
       }
 
-      // 2. Machine Sync
+      // 2. Sincronização Principal da Máquina
       const url = getFullUrl("/api/machine/check");
-      logDebug(`Request URL: ${url}`);
+      logDebug(`POST para: ${url}`);
 
       const pendingLibPayment = localStorage.getItem("MajuBox_PendingLibPayment");
       const response = await api.post(url, {
@@ -309,7 +358,9 @@ export default function App() {
         name: `MajuBox-${hwid.substring(0, 4)}`,
         payment_id_to_verify: pendingLibPayment,
       });
+      
       const data = response.data;
+      if (!data) throw new Error("Resposta do servidor vazia.");
 
       if (data.ok) {
         if (data.token && data.token !== token) {
@@ -337,25 +388,28 @@ export default function App() {
 
         if (!data.license_ok) {
           setScreen("locked");
+          logDebug("Licença expirada.");
         } else {
           localStorage.removeItem("MajuBox_PendingLibPayment");
           setGenres(data.genres || []);
-          logDebug(`Sync Success: ${data.genres?.length || 0} genres`);
+          logDebug(`Sincronizado: ${data.genres?.length || 0} gêneros carregados.`);
           if (screen === "locked" || screen === "welcome") setScreen("genres");
         }
+        setIsConfigLoaded(true);
       } else {
-        logDebug(`Sync Fail: ${data.error || "Unknown"}`);
-        setSyncError(data.error || "Servidor recusou a conexão");
+        const errMsg = data.error || "Erro no servidor";
+        logDebug(`Servidor recusou sync: ${errMsg}`);
+        setSyncError(errMsg);
       }
     } catch (err: any) {
-      const errorDetail =
-        err.response?.data?.error || err.response?.data?.message || err.message;
-      logDebug(`Sync Connection Error: ${errorDetail}`);
-      setSyncError(`Erro de conexão: ${errorDetail}`);
+      const status = err.response?.status;
+      const errorMsg = err.response?.data?.error || err.response?.data?.message || err.message;
+      logDebug(`Erro de Conexão: ${errorMsg} (Status: ${status || '?'})`);
+      setSyncError(`Falha na conexão: ${errorMsg} (Código: ${status || 'Network Error'})`);
     } finally {
       setIsLoading(false);
     }
-  }, [serverUrl, token, hwid, screen, logDebug]);
+  }, [serverUrl, token, hwid, screen, logDebug, api, getFullUrl]);
 
   // Resetar Cursor ao mudar de tela
   useEffect(() => {
@@ -1518,6 +1572,17 @@ export default function App() {
                     />
                     <p className="text-[9px] text-zinc-600 px-1 italic">Cada máquina usa sua própria chave de créditos.</p>
                   </div>
+
+                  <button 
+                    onClick={async () => {
+                      await saveConfig({ serverUrl, token, mpToken });
+                      alert("Configurações salvas localmente!");
+                      syncWithServer();
+                    }}
+                    className="w-full bg-emerald-600/20 text-emerald-500 py-4 rounded-2xl font-bold text-xs uppercase tracking-widest border border-emerald-500/30 hover:bg-emerald-600 hover:text-white transition-all shadow-lg"
+                  >
+                    SALVAR E CONECTAR
+                  </button>
                 </div>
               </section>
 
@@ -1699,6 +1764,62 @@ export default function App() {
         )}
 
       </AnimatePresence>
+
+      {/* --- DEBUG MODAL --- */}
+      {showDebug && (
+        <motion.div 
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="fixed inset-0 z-[100] bg-black/90 p-8 overflow-y-auto text-white"
+        >
+          <div className="flex justify-between items-center mb-6">
+            <h2 className="text-xl font-bold text-brand-red">Logs de Depuração</h2>
+            <button 
+              onClick={() => setShowDebug(false)}
+              className="bg-zinc-800 p-2 rounded-xl"
+            >
+              <X className="w-6 h-6" />
+            </button>
+          </div>
+          
+          <div className="space-y-4">
+            <div className="bg-zinc-900 p-4 rounded-2xl border border-zinc-800">
+              <p className="text-[10px] text-zinc-500 font-bold uppercase mb-1">Configuração Atual</p>
+              <p className="text-xs font-mono break-all text-zinc-300">Server: {serverUrl}</p>
+              <p className="text-xs font-mono break-all text-zinc-300">Token: {token || "Não configurado"}</p>
+              <p className="text-xs font-mono break-all text-zinc-300">HWID: {hwid}</p>
+            </div>
+
+            <div className="flex gap-2">
+               <button 
+                 onClick={() => syncWithServer()}
+                 className="flex-1 bg-brand-red py-3 rounded-xl font-bold text-xs"
+               >
+                 RETESTAR CONEXÃO
+               </button>
+               <button 
+                 onClick={() => setDebugLogs([])}
+                 className="bg-zinc-800 px-4 rounded-xl text-xs font-bold"
+               >
+                 LIMPAR
+               </button>
+            </div>
+
+            <div className="bg-black p-4 rounded-2xl border border-zinc-900 h-96 overflow-y-auto font-mono text-[10px] space-y-1">
+              {debugLogs.map((log, i) => (
+                <div key={i} className="border-b border-zinc-900 pb-1 text-zinc-400 break-words">
+                  {log}
+                </div>
+              ))}
+              {debugLogs.length === 0 && <p className="text-zinc-700 italic">Nenhum log registrado...</p>}
+            </div>
+
+            <p className="text-center text-[10px] text-zinc-600">
+              Verifique se a URL do servidor está correta e termina com .onrender.com (ex: https://maju-server.onrender.com)
+            </p>
+          </div>
+        </motion.div>
+      )}
 
       {/* Global YouTube Player Container */}
       <div 
