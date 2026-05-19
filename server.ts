@@ -234,8 +234,7 @@ async function startServer() {
     // We only skip proxy if it points exactly to the current origin to avoid infinite loops
     const shouldProxy = cleanServerUrl && 
                        cleanServerUrl.startsWith('http') && 
-                       !cleanServerUrl.includes(cleanHost) &&
-                       !cleanHost.includes(cleanServerUrl.replace(/^https?:\/\//, ''));
+                       !cleanServerUrl.includes(cleanHost);
 
     if (shouldProxy) {
       const targetUrl = `${cleanServerUrl}${req.path}`;
@@ -250,22 +249,26 @@ async function startServer() {
         const query = { ...req.query };
         delete query.serverUrl;
         
-        console.log(`[PROXY] ${req.method} ${req.path} -> ${targetUrl}`);
+        console.log(`[PROXY] ${req.method} ${req.path} -> ${targetUrl} (Host: ${host})`);
         
         const response = await axios({
           method: req.method as any,
           url: targetUrl,
           data: payload,
           params: query,
-          timeout: 25000,
+          timeout: 45000, // Increase for Render cold starts
           headers: { 
             'Content-Type': 'application/json',
-            'Accept': 'application/json'
-          }
+            'Accept': 'application/json',
+            'User-Agent': 'MajuBox-Proxy/1.0'
+          },
+          validateStatus: () => true // Handle all status codes
         });
         
+        console.log(`[PROXY SUCCESS] ${req.method} ${req.path} -> ${response.status}`);
         res.set('X-Maju-Proxied', 'true');
-        return res.json(response.data);
+        res.set('X-Maju-Target', cleanServerUrl);
+        return res.status(response.status).json(response.data);
       } catch (error: any) {
         const status = error.response?.status || 500;
         const errorDataBody = error.response?.data;

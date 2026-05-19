@@ -260,16 +260,16 @@ export default function App() {
           url: finalUrl,
           data,
           headers: { 'Content-Type': 'application/json' },
-          connectTimeout: 15000,
-          readTimeout: 15000
+          connectTimeout: 30000,
+          readTimeout: 30000
         };
         const response = await CapacitorHttp.post(options);
         return response;
       } else {
-        logDebug(`Axios POST (Browser Proxy): ${path}`);
+        logDebug(`Axios POST (Local Proxy): ${path}`);
         const payload = { ...data, serverUrl };
         return await axios.post(path, payload, { 
-          timeout: 15000,
+          timeout: 45000,
           headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }
         });
       }
@@ -283,17 +283,17 @@ export default function App() {
         logDebug(`CapacitorHttp GET: ${finalUrl}`);
         const options = {
           url: finalUrl,
-          connectTimeout: 15000,
-          readTimeout: 15000
+          connectTimeout: 30000,
+          readTimeout: 30000
         };
         const response = await CapacitorHttp.get(options);
         return response;
       } else {
-        logDebug(`Axios GET (Browser Proxy): ${path}`);
+        logDebug(`Axios GET (Local Proxy): ${path}`);
         // We pass serverUrl in a header for GET requests
         return await axios.get(path, { 
           params: { serverUrl },
-          timeout: 15000,
+          timeout: 45000,
           headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }
         });
       }
@@ -539,7 +539,8 @@ export default function App() {
       if (!data) throw new Error("Resposta do servidor vazia.");
 
       // Sucesso no handshake ou pelo menos retorno válido
-      if (data.ok || data.status === 'ok' || data.machine_id || data.genres) {
+      if (data.ok || data.status === 'ok' || data.machine_id || data.genres || data.id) {
+        logDebug(`Sync Success: Machine ID ${data.machine_id || data.id}`);
         if (data.token && data.token !== token) {
           setToken(data.token);
           localStorage.setItem("MajuBox_Token", data.token);
