@@ -268,25 +268,35 @@ async function startServer() {
       try {
         let response = await tryProxy(targetUrl);
         
-        // Fallback: If 404 and target path starts with /api, try stripping it
-        // This handles cases where the user's Python server doesn't use the /api prefix
-        if (response.status === 404 && req.path.startsWith('/api/')) {
-          const strippedPath = req.path.replace(/^\/api/, '');
-          const fallbackUrl = `${cleanServerUrl}${strippedPath}`;
-          console.log(`[PROXY FALLBACK] 404 on ${targetUrl}, trying ${fallbackUrl}`);
-          const fallbackRes = await tryProxy(fallbackUrl);
-          if (fallbackRes.status !== 404) {
-             response = fallbackRes;
+        // Fallback robusto: busca tanto com quanto sem prefixo /api
+        if (response.status === 404) {
+          let fallbackUrl = "";
+          if (req.path.startsWith('/api/')) {
+            fallbackUrl = `${cleanServerUrl}${req.path.replace(/^\/api/, '')}`;
+          } else {
+            fallbackUrl = `${cleanServerUrl}/api${req.path}`;
+          }
+          
+          if (fallbackUrl) {
+            console.log(`[PROXY FALLBACK] 404 on ${targetUrl}, trying ${fallbackUrl}`);
+            const fallbackRes = await tryProxy(fallbackUrl);
+            if (fallbackRes.status !== 404) {
+               response = fallbackRes;
+            }
           }
         }
 
-        const responseData = (typeof response.data === 'string' && response.data.trim().startsWith('{')) 
-          ? JSON.parse(response.data) 
-          : response.data || { ok: true, message: "OK (No data)" };
+        const responseData = response.data;
         
         console.log(`[PROXY SUCCESS] ${req.method} ${req.path} -> ${response.status}`);
         res.set('X-Maju-Proxied', 'true');
         res.set('X-Maju-Target', cleanServerUrl);
+
+        if (!responseData && response.status === 200) {
+           // Se o server retornou 200 mas corpo vazio, podemos estar com problema de encoding ou o server do user está mal configurado
+           return res.status(200).json({ ok: false, error: "O servidor remoto respondeu com sucesso (200) mas sem conteúdo no corpo." });
+        }
+
         return res.status(response.status).json(responseData);
       } catch (error: any) {
         const status = error.response?.status || 500;
@@ -295,8 +305,8 @@ async function startServer() {
         console.error(`[PROXY ERROR] ${req.method} ${req.path} -> ${targetUrl} | Status: ${status} | Msg: ${error.message}`);
         
         let finalErrorData = errorDataBody;
-        if (typeof finalErrorData === 'string' && finalErrorData.trim().startsWith('<!doctype')) {
-           finalErrorData = { ok: false, error: `O servidor em ${cleanServerUrl} retornou um erro (${status}). Verifique se a URL está correta.`, status };
+        if (typeof finalErrorData === 'string' && (finalErrorData.trim().startsWith('<!doctype') || finalErrorData.trim().startsWith('<html'))) {
+           finalErrorData = { ok: false, error: `O servidor em ${cleanServerUrl} retornou uma página HTML em vez de dados (${status}). Verifique se o endereço do servidor está correto.`, status };
         } else if (!finalErrorData || typeof finalErrorData !== 'object') {
            finalErrorData = { ok: false, error: error.message, status };
         }
@@ -474,17 +484,24 @@ async function startServer() {
   };
 
   app.post("/api/machine/check", handleMachineCheck);
+  app.post("/machine/check", handleMachineCheck);
   app.post("/api/proxy/check", handleMachineCheck);
+  app.post("/proxy/check", handleMachineCheck);
   app.post("/api/machine/register", handleMachineCheck);
+  app.post("/machine/register", handleMachineCheck);
 
-  app.get("/api/machine/genres", async (req, res) => {
+  const handleGetGenres = async (req: express.Request, res: express.Response) => {
     try {
       const genres = await db.all("SELECT id, name, cover_url, sort_order FROM genres ORDER BY sort_order, name");
       res.json({ ok: true, genres });
     } catch (err) {
       res.status(500).json({ ok: false, error: "Error fetching genres" });
     }
-  });
+  };
+  app.get("/api/machine/genres", handleGetGenres);
+  app.get("/machine/genres", handleGetGenres);
+  app.post("/api/machine/genres", handleGetGenres); // Support POST for genres as well
+  app.post("/machine/genres", handleGetGenres);
 
   app.post("/api/machine/config", async (req, res) => {
     const { token, hwid, name, machine_name, admin_password, admin_pass, pix_key, pix_name, pix_city, mp_token } = req.body;
@@ -586,6 +603,7 @@ async function startServer() {
   };
 
   app.post("/api/machine/pix/create", handlePixCreate);
+  app.post("/machine/pix/create", handlePixCreate);
   app.post("/api/proxy/pix/create", handlePixCreate);
 
   const handlePixStatus = async (req, res) => {
@@ -619,9 +637,10 @@ async function startServer() {
   };
 
   app.post("/api/machine/pix/status", handlePixStatus);
+  app.post("/machine/pix/status", handlePixStatus);
   app.post("/api/proxy/pix/status", handlePixStatus);
 
-  app.post("/api/machine/play", async (req, res) => {
+  const handlePlay = async (req, res) => {
     const { hwid, playlist_id } = req.body;
     if (hwid) {
       const machine = await db.get("SELECT id FROM machines WHERE hwid = ?", [hwid]);
@@ -630,7 +649,9 @@ async function startServer() {
       }
     }
     res.json({ ok: true });
-  });
+  };
+  app.post("/api/machine/play", handlePlay);
+  app.post("/machine/play", handlePlay);
 
   // --- Admin API (Manage Content) ---
 

@@ -250,9 +250,9 @@ export default function App() {
         const cleanBase = base.replace(/\/$/, '');
         
         let finalUrl = path;
-        if (path === '/api/machine/check') finalUrl = `${cleanBase}/api/machine/check`;
-        else if (path === '/api/machine/pix/create') finalUrl = `${cleanBase}/api/machine/pix/create`;
-        else if (path === '/api/machine/pix/status') finalUrl = `${cleanBase}/api/machine/pix/status`;
+        if (path === '/machine/check') finalUrl = `${cleanBase}/machine/check`;
+        else if (path === '/machine/pix/create') finalUrl = `${cleanBase}/machine/pix/create`;
+        else if (path === '/machine/pix/status') finalUrl = `${cleanBase}/machine/pix/status`;
         else if (!path.startsWith('http')) finalUrl = `${cleanBase}${path.startsWith('/') ? path : '/' + path}`;
 
         logDebug(`CapacitorHttp POST: ${finalUrl}`);
@@ -446,8 +446,8 @@ export default function App() {
   // Sincronização secundária para buscar gêneros se não vierem no check
   const fetchGenres = useCallback(async () => {
     try {
-      logDebug("Buscando gêneros (GET /api/machine/genres)...");
-      const res = await api.get('/api/machine/genres');
+      logDebug("Buscando gêneros (GET /machine/genres)...");
+      const res = await api.get('/machine/genres');
       const data = res.data;
       
       // Tenta extrair lista de gêneros de vários campos possíveis
@@ -466,7 +466,7 @@ export default function App() {
         });
         setGenres(normalizedGenres);
         const totalItems = normalizedGenres.reduce((acc: number, g: any) => acc + (g.playlists?.length || 0), 0);
-        logDebug(`Gêneros carregados via /api/machine/genres: ${normalizedGenres.length} gêneros, ${totalItems} itens.`);
+        logDebug(`Gêneros carregados via /machine/genres: ${normalizedGenres.length} gêneros, ${totalItems} itens.`);
         return true;
       }
       return false;
@@ -474,8 +474,8 @@ export default function App() {
       logDebug(`Erro ao buscar gêneros (GET): ${e.message}`);
       // Tenta via POST como fallback
       try {
-        logDebug("Tentando POST /api/machine/genres como fallback...");
-        const resPost = await api.post('/api/machine/genres', { hwid, token });
+        logDebug("Tentando POST /machine/genres como fallback...");
+        const resPost = await api.post('/machine/genres', { hwid, token });
         if (resPost.data && Array.isArray(resPost.data)) {
            // ... process similar to above ...
            const rawList = resPost.data.genres || resPost.data.categories || resPost.data.generos || (Array.isArray(resPost.data) ? resPost.data : []);
@@ -508,7 +508,7 @@ export default function App() {
     const adminPass = localStorage.getItem("MajuBox_AdminPass") || "1234";
     const pendingLibPayment = localStorage.getItem("MajuBox_PendingLibPayment");
 
-    // Tentar Handshake via /api/machine/check ou /api/proxy/check
+    // Tentar Handshake via /machine/check ou /proxy/check
     const tryCheck = async (endpoint: string) => {
       logDebug(`Attempting Sync: ${endpoint}`);
       const payload: any = {
@@ -529,10 +529,10 @@ export default function App() {
     try {
       let response;
       try {
-        response = await tryCheck("/api/machine/check");
+        response = await tryCheck("/machine/check");
       } catch (e: any) {
         logDebug(`Erro no check principal: ${e.message}. Tentando proxy/check...`);
-        response = await tryCheck("/api/proxy/check");
+        response = await tryCheck("/proxy/check");
       }
 
       const data = response.data;
@@ -641,7 +641,7 @@ export default function App() {
       if (!pId) return;
 
       try {
-        const url = getFullUrl('/api/machine/pix/status');
+        const url = getFullUrl('/machine/pix/status');
         const res = await api.post(url, {
           token,
           payment_id: pId
@@ -831,7 +831,7 @@ export default function App() {
     if (screen === 'admin') {
       const fetchAdminGenres = async () => {
         try {
-          const res = await api.get(getFullUrl('/api/machine/genres'));
+          const res = await api.get(getFullUrl('/machine/genres'));
           const data = res.data?.genres || res.data;
           if (Array.isArray(data)) {
             setGenres(data);
@@ -872,7 +872,7 @@ export default function App() {
     }
     setIsLoading(true);
     try {
-      const url = getFullUrl('/api/machine/pix/create');
+      const url = getFullUrl('/machine/pix/create');
       const response = await api.post(url, { 
         mp_token: mpToken, 
         amount: 1.00, 
@@ -1159,7 +1159,7 @@ export default function App() {
 
     // Log play to server
     try {
-      await api.post('/api/machine/play', { 
+      await api.post('/machine/play', { 
         hwid, 
         token,
         playlist_id: song.id,
@@ -1204,7 +1204,7 @@ export default function App() {
     
     // Save info to server (Handshake/Sync)
     try {
-      await api.post(getFullUrl('/api/machine/check'), { 
+      await api.post(getFullUrl('/machine/check'), { 
         token: tokenInput,
         hwid,
         // Enviar todas as variações possíveis para garantir compatibilidade com o servidor remoto
