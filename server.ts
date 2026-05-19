@@ -271,13 +271,17 @@ async function startServer() {
         // Fallback robusto: busca tanto com quanto sem prefixo /api
         if (response.status === 404) {
           let fallbackUrl = "";
+          const hasApiInBase = cleanServerUrl.endsWith('/api');
+          
           if (req.path.startsWith('/api/')) {
+            // Se o path tem /api/, tenta sem
             fallbackUrl = `${cleanServerUrl}${req.path.replace(/^\/api/, '')}`;
-          } else {
+          } else if (!hasApiInBase) {
+            // Se o path não tem e a base também não, tenta adicionar
             fallbackUrl = `${cleanServerUrl}/api${req.path}`;
           }
           
-          if (fallbackUrl) {
+          if (fallbackUrl && fallbackUrl !== targetUrl) {
             console.log(`[PROXY FALLBACK] 404 on ${targetUrl}, trying ${fallbackUrl}`);
             const fallbackRes = await tryProxy(fallbackUrl);
             if (fallbackRes.status !== 404) {

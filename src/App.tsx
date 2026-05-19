@@ -192,7 +192,7 @@ export default function App() {
       }
     }
     // O padrão absoluto é sempre o servidor ativo juke-2
-    return "https://juke-2.onrender.com";
+    return "https://juke-2.onrender.com/api/";
   });
   const [token, setToken] = useState('');
   const [mpToken, setMpToken] = useState(''); // New: Mercado Pago token for credits
@@ -330,19 +330,32 @@ export default function App() {
     if (Capacitor.isNativePlatform()) {
       const base = serverUrl.startsWith('http') ? serverUrl : `https://${serverUrl}`;
       const cleanBase = base.replace(/\/$/, '');
-      const cleanPath = path.startsWith('/') ? path : '/' + path;
+      let cleanPath = path.startsWith('/') ? path : '/' + path;
+      
+      // Evita duplicar /api se a base já tiver
+      if (cleanBase.endsWith('/api') && cleanPath.startsWith('/api/')) {
+        cleanPath = cleanPath.replace('/api', '');
+      }
+      
       return `${cleanBase}${cleanPath}`;
     }
 
     // No Browser, as rotas /api/, /machine/ e /proxy/ passam pelo proxy local em server.ts
+    // Exceto se for uma URL absoluta
+    if (path.startsWith('http') || path.startsWith('data:')) return path;
+
     if (path.startsWith('/api/') || path.startsWith('/machine/') || path.startsWith('/proxy/')) {
       return path;
     }
 
-    if (path.startsWith('http') || path.startsWith('data:')) return path;
     const base = serverUrl.startsWith('http') ? serverUrl : `https://${serverUrl}`;
     const cleanBase = base.replace(/\/$/, '');
-    const cleanPath = path.startsWith('/') ? path : '/' + path;
+    let cleanPath = path.startsWith('/') ? path : '/' + path;
+    
+    if (cleanBase.endsWith('/api') && cleanPath.startsWith('/api/')) {
+      cleanPath = cleanPath.replace('/api', '');
+    }
+
     return `${cleanBase}${cleanPath}`;
   }, [serverUrl]);
 
