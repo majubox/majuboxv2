@@ -288,13 +288,13 @@ async function startServer() {
 
         const responseData = response.data;
         
-        console.log(`[PROXY SUCCESS] ${req.method} ${req.path} -> ${response.status}`);
+        console.log(`[PROXY SUCCESS] ${req.method} ${req.path} -> ${response.status} (Type: ${typeof responseData})`);
         res.set('X-Maju-Proxied', 'true');
         res.set('X-Maju-Target', cleanServerUrl);
 
-        if (!responseData && response.status === 200) {
-           // Se o server retornou 200 mas corpo vazio, podemos estar com problema de encoding ou o server do user está mal configurado
-           return res.status(200).json({ ok: false, error: "O servidor remoto respondeu com sucesso (200) mas sem conteúdo no corpo." });
+        if ((responseData === null || responseData === undefined || responseData === '') && response.status === 200) {
+           console.log(`[PROXY WARNING] Remote server returned 200 but EMPTY BODY.`);
+           return res.status(200).json({ ok: false, error: "O servidor remoto respondeu com sucesso (200) mas sem conteúdo no corpo. Verifique se a rota do seu servidor Python está retornando dados (jsonify)." });
         }
 
         return res.status(response.status).json(responseData);

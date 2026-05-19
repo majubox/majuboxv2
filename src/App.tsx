@@ -334,8 +334,8 @@ export default function App() {
       return `${cleanBase}${cleanPath}`;
     }
 
-    // No Browser, as rotas /api/ passam pelo proxy local em server.ts
-    if (path.startsWith('/api/')) {
+    // No Browser, as rotas /api/, /machine/ e /proxy/ passam pelo proxy local em server.ts
+    if (path.startsWith('/api/') || path.startsWith('/machine/') || path.startsWith('/proxy/')) {
       return path;
     }
 
@@ -538,7 +538,7 @@ export default function App() {
       const data = response.data;
       if (!data) {
         logDebug(`Resposta do servidor vazia. Status: ${response.status}`);
-        throw new Error(`Resposta do servidor vazia (Status: ${response.status})`);
+        throw new Error(`O servidor respondeu com sucesso (200) mas sem dados (Status: ${response.status}). Verifique o seu backend Python.`);
       }
 
       // Se for string, tenta parsear (acontece se o proxy retornar HTML por erro do target)
