@@ -226,20 +226,18 @@ async function startServer() {
   app.use(async (req, res, next) => {
     const serverUrl = req.body?.serverUrl || req.query?.serverUrl;
     const host = req.get('host') || '';
+    const cleanServerUrl = serverUrl ? (serverUrl as string).replace(/\/$/, '') : '';
+    const cleanHost = host.replace(/\/$/, '');
     
     // Check if we should proxy
-    const shouldProxy = serverUrl && 
-                       typeof serverUrl === 'string' && 
-                       serverUrl.startsWith('http') && 
-                       !serverUrl.includes(host);
+    // We proxy if serverUrl is provided and is an absolute URL
+    // We only skip proxy if it points exactly to the current origin to avoid infinite loops
+    const shouldProxy = cleanServerUrl && 
+                       cleanServerUrl.startsWith('http') && 
+                       !cleanServerUrl.includes(cleanHost) &&
+                       !cleanHost.includes(cleanServerUrl.replace(/^https?:\/\//, ''));
 
     if (shouldProxy) {
-      const cleanServerUrl = (serverUrl as string).replace(/\/$/, '');
-      if (!cleanServerUrl.startsWith('http')) {
-        // Fallback or skip
-        return next();
-      }
-      
       const targetUrl = `${cleanServerUrl}${req.path}`;
       
       try {
@@ -248,17 +246,17 @@ async function startServer() {
           delete payload.serverUrl;
         }
         
+        // Remove serverUrl from query params for the proxied request
+        const query = { ...req.query };
+        delete query.serverUrl;
+        
         console.log(`[PROXY] ${req.method} ${req.path} -> ${targetUrl}`);
-        if (payload) {
-          const keys = Object.keys(payload);
-          console.log(`[PROXY DATA KEYS]: ${keys.join(', ')}`);
-        }
         
         const response = await axios({
           method: req.method as any,
           url: targetUrl,
           data: payload,
-          params: { ...req.query, serverUrl: undefined },
+          params: query,
           timeout: 25000,
           headers: { 
             'Content-Type': 'application/json',
@@ -274,20 +272,10 @@ async function startServer() {
         
         console.error(`[PROXY ERROR] ${req.method} ${req.path} -> ${targetUrl} | Status: ${status} | Msg: ${error.message}`);
         
-        if (errorDataBody) {
-          const bodyStr = typeof errorDataBody === 'string' ? errorDataBody : JSON.stringify(errorDataBody);
-          console.error(`[PROXY ERROR BODY]:`, bodyStr.substring(0, 500));
-        }
-        
         let finalErrorData = errorDataBody;
         if (typeof finalErrorData === 'string' && finalErrorData.trim().startsWith('<!doctype')) {
-           // If it's HTML, don't send the whole thing to the client
-           finalErrorData = { ok: false, error: `O servidor remoto retornou um erro interno (500). Verifique os logs do servidor em ${targetUrl}`, status };
-        } else if (typeof finalErrorData === 'string') {
-          try { finalErrorData = JSON.parse(finalErrorData); } catch(e) { finalErrorData = { ok: false, error: finalErrorData }; }
-        }
-        
-        if (!finalErrorData || typeof finalErrorData !== 'object') {
+           finalErrorData = { ok: false, error: `O servidor em ${cleanServerUrl} retornou um erro (${status}). Verifique se a URL está correta.`, status };
+        } else if (!finalErrorData || typeof finalErrorData !== 'object') {
            finalErrorData = { ok: false, error: error.message, status };
         }
         

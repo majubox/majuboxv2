@@ -180,6 +180,18 @@ export default function App() {
   const [serverUrl, setServerUrl] = useState(() => {
     const envUrl = (import.meta as any).env.VITE_SERVER_URL;
     if (envUrl) return envUrl;
+    
+    // Tenta carregar do localStorage primeiro
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('MajuBox_Config');
+      if (saved) {
+        try {
+          const cfg = JSON.parse(saved);
+          if (cfg.serverUrl) return cfg.serverUrl;
+        } catch (e) {}
+      }
+    }
+    // O padrão absoluto é sempre o servidor ativo juke-2
     return "https://juke-2.onrender.com";
   });
   const [token, setToken] = useState('');
