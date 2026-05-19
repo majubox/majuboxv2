@@ -280,11 +280,13 @@ async function startServer() {
           }
         }
 
+        const responseData = (typeof response.data === 'string' && response.data.trim().startsWith('{')) 
+          ? JSON.parse(response.data) 
+          : response.data || { ok: true, message: "OK (No data)" };
+        
         console.log(`[PROXY SUCCESS] ${req.method} ${req.path} -> ${response.status}`);
         res.set('X-Maju-Proxied', 'true');
         res.set('X-Maju-Target', cleanServerUrl);
-        
-        const responseData = response.data || { ok: true, message: "OK (No data)" };
         return res.status(response.status).json(responseData);
       } catch (error: any) {
         const status = error.response?.status || 500;
