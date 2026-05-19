@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Music, 
@@ -101,6 +101,79 @@ const loadConfig = async (): Promise<any> => {
   }
 };
 
+// --- Helpers ---
+const toggleFullscreen = () => {
+  if (Capacitor.isNativePlatform()) return;
+  
+  const doc = document.documentElement as any;
+  const isFull = !!(document.fullscreenElement || (document as any).webkitFullscreenElement || (document as any).mozFullScreenElement || (document as any).msFullscreenElement);
+
+  if (!isFull) {
+    const requestMethod = doc.requestFullscreen || doc.webkitRequestFullscreen || doc.mozRequestFullScreen || doc.msRequestFullscreen;
+    if (requestMethod) {
+      requestMethod.call(doc).catch((err: any) => {
+        console.log(`Error attempting to enable full-screen mode: ${err.message}`);
+      });
+    }
+  }
+};
+
+// --- Hooks ---
+function useDraggableScroll(ref: React.RefObject<HTMLDivElement | null>) {
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+
+    let isDown = false;
+    let startX: number;
+    let startY: number;
+    let scrollLeft: number;
+    let scrollTop: number;
+
+    const onMouseDown = (e: MouseEvent) => {
+      isDown = true;
+      el.classList.add('active');
+      startX = e.pageX - el.offsetLeft;
+      startY = e.pageY - el.offsetTop;
+      scrollLeft = el.scrollLeft;
+      scrollTop = el.scrollTop;
+    };
+
+    const onMouseLeave = () => {
+      isDown = false;
+      el.classList.remove('active');
+    };
+
+    const onMouseUp = () => {
+      isDown = false;
+      el.classList.remove('active');
+    };
+
+    const onMouseMove = (e: MouseEvent) => {
+      if (!isDown) return;
+      e.preventDefault();
+      const x = e.pageX - el.offsetLeft;
+      const y = e.pageY - el.offsetTop;
+      const walkX = (x - startX) * 2;
+      const walkY = (y - startY) * 2;
+      el.scrollLeft = scrollLeft - walkX;
+      el.scrollTop = scrollTop - walkY;
+    };
+
+    el.addEventListener('mousedown', onMouseDown);
+    el.addEventListener('mouseleave', onMouseLeave);
+    el.addEventListener('mouseup', onMouseUp);
+    el.addEventListener('mousemove', onMouseMove);
+
+    return () => {
+      el.removeEventListener('mousedown', onMouseDown);
+      el.removeEventListener('mouseleave', onMouseLeave);
+      el.removeEventListener('mouseup', onMouseUp);
+      el.removeEventListener('mousemove', onMouseMove);
+    };
+  }, [ref]);
+}
+
 export default function App() {
   // Persistence / Configuration
   const [isConfigLoaded, setIsConfigLoaded] = useState(false);
@@ -111,12 +184,18 @@ export default function App() {
   });
   const [token, setToken] = useState('');
   const [mpToken, setMpToken] = useState(''); // New: Mercado Pago token for credits
+  
+  // Local input states for Admin screen to prevent infinite sync loops while typing
+  const [serverUrlInput, setServerUrlInput] = useState(serverUrl);
+  const [tokenInput, setTokenInput] = useState('');
+  const [mpTokenInput, setMpTokenInput] = useState('');
+  
   const [licensePrice, setLicensePrice] = useState('');
   const [licenseInfo, setLicenseInfo] = useState<{ ok: boolean; exp: string; pix?: any } | null>(null);
   const [hwid] = useState(() => {
     const saved = localStorage.getItem('MajuBox_HWID');
     if (saved) return saved;
-    const newId = uuidv4().toUpperCase();
+    const newId = Math.random().toString(36).substring(2, 12).toUpperCase();
     localStorage.setItem('MajuBox_HWID', newId);
     return newId;
   });
@@ -128,6 +207,10 @@ export default function App() {
   const [selectedGenre, setSelectedGenre] = useState<Genre | null>(null);
   const [selectedDVD, setSelectedDVD] = useState<Playlist | null>(null);
   const [currentPlaying, setCurrentPlaying] = useState<Song | null>(null);
+  const currentPlayingRef = useRef(currentPlaying);
+  useEffect(() => {
+    currentPlayingRef.current = currentPlaying;
+  }, [currentPlaying]);
   const [previewSong, setPreviewSong] = useState<Song | null>(null);
   const [previewTimer, setPreviewTimer] = useState(0);
   const [queue, setQueue] = useState<Song[]>([]);
@@ -148,7 +231,7 @@ export default function App() {
   }, []);
 
   // --- API Helper ---
-  const api = useCallback({
+  const api = useMemo(() => ({
     post: async (path: string, data: any) => {
       if (Capacitor.isNativePlatform()) {
         const base = serverUrl.startsWith('http') ? serverUrl : `https://${serverUrl}`;
@@ -228,9 +311,9 @@ export default function App() {
         return await axios.put(path, { ...data, serverUrl }, { timeout: 15000 });
       }
     }
-  }, [logDebug, serverUrl]);
+  }), [logDebug, serverUrl]);
 
-  const getFullUrl = (path: string) => {
+  const getFullUrl = useCallback((path: string) => {
     // No Capacitor, sempre URL completa
     if (Capacitor.isNativePlatform()) {
       const base = serverUrl.startsWith('http') ? serverUrl : `https://${serverUrl}`;
@@ -249,16 +332,25 @@ export default function App() {
     const cleanBase = base.replace(/\/$/, '');
     const cleanPath = path.startsWith('/') ? path : '/' + path;
     return `${cleanBase}${cleanPath}`;
-  };
+  }, [serverUrl]);
 
   // --- Initial Loading ---
   useEffect(() => {
     const initApp = async () => {
       const config = await loadConfig();
       if (config) {
-        if (config.serverUrl) setServerUrl(config.serverUrl);
-        if (config.token) setToken(config.token);
-        if (config.mpToken) setMpToken(config.mpToken);
+        if (config.serverUrl) {
+          setServerUrl(config.serverUrl);
+          setServerUrlInput(config.serverUrl);
+        }
+        if (config.token) {
+          setToken(config.token);
+          setTokenInput(config.token);
+        }
+        if (config.mpToken) {
+          setMpToken(config.mpToken);
+          setMpTokenInput(config.mpToken);
+        }
         if (config.credits !== undefined) setCredits(config.credits);
         if (config.revenue !== undefined) setTotalRevenue(config.revenue);
         logDebug("Configurações carregadas da memória.");
@@ -302,6 +394,15 @@ export default function App() {
 
   const [ytPlayerState, setYtPlayerState] = useState(-1);
   const ytPlayerRef = useRef<any>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const genresListRef = useRef<HTMLDivElement>(null);
+  const dvdsListRef = useRef<HTMLDivElement>(null);
+  const songsListRef = useRef<HTMLDivElement>(null);
+  
+  useDraggableScroll(genresListRef);
+  useDraggableScroll(dvdsListRef);
+  useDraggableScroll(songsListRef);
+
   const pendingVideoRef = useRef<string | null>(null);
   const queueRef = useRef<Song[]>(queue);
 
@@ -330,86 +431,173 @@ export default function App() {
     };
   }, [isAttractMode, resetIdle]);
 
+  // Sincronização secundária para buscar gêneros se não vierem no check
+  const fetchGenres = useCallback(async () => {
+    try {
+      logDebug("Buscando gêneros (GET /api/machine/genres)...");
+      const res = await api.get('/api/machine/genres');
+      const data = res.data;
+      
+      // Tenta extrair lista de gêneros de vários campos possíveis
+      const rawList = data.genres || data.categories || data.generos || data.categories_list || (Array.isArray(data) ? data : []);
+      const rawGenres = Array.isArray(rawList) ? rawList : Object.values(rawList);
+
+      if (rawGenres.length > 0) {
+        const normalizedGenres = rawGenres.map((g: any) => {
+          const rawItems = g.playlists || g.musicas || g.items || g.dvds || g.songs || g.conteudo || [];
+          const items = Array.isArray(rawItems) ? rawItems : Object.values(rawItems);
+          return { 
+            ...g, 
+            name: g.name || g.nome || g.title || g.titulo || "Gênero",
+            playlists: items 
+          };
+        });
+        setGenres(normalizedGenres);
+        const totalItems = normalizedGenres.reduce((acc: number, g: any) => acc + (g.playlists?.length || 0), 0);
+        logDebug(`Gêneros carregados via /api/machine/genres: ${normalizedGenres.length} gêneros, ${totalItems} itens.`);
+        return true;
+      }
+      return false;
+    } catch (e: any) {
+      logDebug(`Erro ao buscar gêneros (GET): ${e.message}`);
+      // Tenta via POST como fallback
+      try {
+        logDebug("Tentando POST /api/machine/genres como fallback...");
+        const resPost = await api.post('/api/machine/genres', { hwid, token });
+        if (resPost.data && Array.isArray(resPost.data)) {
+           // ... process similar to above ...
+           const rawList = resPost.data.genres || resPost.data.categories || resPost.data.generos || (Array.isArray(resPost.data) ? resPost.data : []);
+           const rawGenres = Array.isArray(rawList) ? rawList : Object.values(rawList);
+           if (rawGenres.length > 0) {
+             const normalizedGenres = rawGenres.map((g: any) => {
+               const rawItems = g.playlists || g.musicas || g.items || g.dvds || g.songs || g.conteudo || [];
+               const items = Array.isArray(rawItems) ? rawItems : Object.values(rawItems);
+               return { ...g, name: g.name || g.nome || "Gênero", playlists: items };
+             });
+             setGenres(normalizedGenres);
+             return true;
+           }
+           return true; 
+        }
+      } catch (e2) {}
+      return false;
+    }
+  }, [api, logDebug, hwid, token]);
+
   // Sincronização inicial
   const syncWithServer = useCallback(async () => {
+    if (!hwid) return;
+    
     setIsLoading(true);
     setSyncError("");
-    logDebug(`Sincronizando com: ${serverUrl}`);
+    logDebug(`Iniciando Sincronização (HWID: ${hwid}, Server: ${serverUrl})`);
 
-    try {
-      // 1. Tentar carregar preço da licença (Opcional, mas útil)
-      try {
-        const configRes = await api.get(getFullUrl("/api/admin/config"));
-        if (configRes.data && configRes.data.license_price) {
-          setLicensePrice(configRes.data.license_price);
-        }
-      } catch (e: any) {
-        logDebug(`Aviso: Falha ao pré-carregar config: ${e.message}`);
+    const machineName = localStorage.getItem("MajuBox_MachineName") || `MajuBox-${hwid.substring(0, 6)}`;
+    const adminPass = localStorage.getItem("MajuBox_AdminPass") || "1234";
+    const pendingLibPayment = localStorage.getItem("MajuBox_PendingLibPayment");
+
+    // Tentar Handshake via /api/machine/check ou /api/proxy/check
+    const tryCheck = async (endpoint: string) => {
+      logDebug(`Attempting Sync: ${endpoint}`);
+      const payload: any = {
+        hwid,
+        machine_name: machineName,
+        admin_pass: adminPass,
+        license_verify: pendingLibPayment || ""
+      };
+      
+      // Só envia o token se ele existir e for válido
+      if (token && token.trim() !== "") {
+        payload.token = token;
       }
 
-      // 2. Sincronização Principal da Máquina
-      const url = getFullUrl("/api/machine/check");
-      logDebug(`POST para: ${url}`);
+      return await api.post(endpoint, payload);
+    };
 
-      const pendingLibPayment = localStorage.getItem("MajuBox_PendingLibPayment");
-      const response = await api.post(url, {
-        token,
-        hwid,
-        name: `MajuBox-${hwid.substring(0, 4)}`,
-        payment_id_to_verify: pendingLibPayment,
-      });
-      
+    try {
+      let response;
+      try {
+        response = await tryCheck("/api/machine/check");
+      } catch (e: any) {
+        logDebug(`Erro no check principal: ${e.message}. Tentando proxy/check...`);
+        response = await tryCheck("/api/proxy/check");
+      }
+
       const data = response.data;
       if (!data) throw new Error("Resposta do servidor vazia.");
 
-      if (data.ok) {
+      // Sucesso no handshake ou pelo menos retorno válido
+      if (data.ok || data.status === 'ok' || data.machine_id || data.genres) {
         if (data.token && data.token !== token) {
           setToken(data.token);
+          localStorage.setItem("MajuBox_Token", data.token);
         }
 
-        if (data.license_price) {
-          setLicensePrice(data.license_price);
-        } else if (data.pix_liberation?.amount) {
-          setLicensePrice(data.pix_liberation.amount.toString());
-        }
+        if (data.license_price) setLicensePrice(data.license_price);
 
+        const pix = data.pix_liberation || data.pix || data.pix_data;
         setLicenseInfo({
-          ok: data.license_ok,
-          exp: data.license_exp,
-          pix: data.pix_liberation,
+          ok: data.license_ok !== false,
+          exp: data.license_exp || "",
+          pix: pix,
         });
 
-        if (data.pix_liberation?.payment_id) {
-          localStorage.setItem(
-            "MajuBox_PendingLibPayment",
-            data.pix_liberation.payment_id
-          );
+        if (pix?.payment_id) {
+          localStorage.setItem("MajuBox_PendingLibPayment", pix.payment_id);
         }
 
-        if (!data.license_ok) {
+        const isLocked = data.license_ok === false;
+        if (isLocked) {
           setScreen("locked");
           logDebug("Licença expirada.");
         } else {
           localStorage.removeItem("MajuBox_PendingLibPayment");
-          setGenres(data.genres || []);
-          logDebug(`Sincronizado: ${data.genres?.length || 0} gêneros carregados.`);
-          if (screen === "locked" || screen === "welcome") setScreen("genres");
+          
+          // Se vier gêneros no check, usa eles
+          const rawGenresList = data.genres || data.categories || data.generos || data.categories_list;
+          if (rawGenresList) {
+            const rawGenres = Array.isArray(rawGenresList) ? rawGenresList : Object.values(rawGenresList);
+            const normalizedGenres = rawGenres.map((g: any) => {
+              const rawItems = g.playlists || g.musicas || g.items || g.dvds || g.songs || g.conteudo || [];
+              const items = Array.isArray(rawItems) ? rawItems : Object.values(rawItems);
+              return { 
+                ...g, 
+                name: g.name || g.nome || g.title || g.titulo || "Gênero",
+                playlists: items 
+              };
+            });
+            setGenres(normalizedGenres);
+            logDebug(`Sincronizado via check: ${normalizedGenres.length} gêneros.`);
+          } else {
+            // Se não veio gêneros, tenta buscar na rota secundária
+            await fetchGenres();
+          }
+          
+          setScreen(curr => (curr === "locked" || curr === "welcome") ? "genres" : curr);
         }
-        setIsConfigLoaded(true);
       } else {
-        const errMsg = data.error || "Erro no servidor";
-        logDebug(`Servidor recusou sync: ${errMsg}`);
+        const errMsg = data.error || data.message || "Erro no servidor (Check failed)";
+        logDebug(`Servidor recusou handshake: ${errMsg}`);
         setSyncError(errMsg);
+        // Tenta buscar gêneros mesmo se check falhar (pode ser que o server precise apenas de identificação)
+        await fetchGenres();
       }
     } catch (err: any) {
       const status = err.response?.status;
       const errorMsg = err.response?.data?.error || err.response?.data?.message || err.message;
-      logDebug(`Erro de Conexão: ${errorMsg} (Status: ${status || '?'})`);
-      setSyncError(`Falha na conexão: ${errorMsg} (Código: ${status || 'Network Error'})`);
+      logDebug(`Falha crítica de conexão: ${errorMsg} (Status: ${status || '?'})`);
+      setSyncError(`Falha na conexão: ${errorMsg}`);
+      
+      // Fallback radical: tenta apenas carregar gêneros
+      const gotGenres = await fetchGenres();
+      if (gotGenres) {
+         setScreen(curr => (curr === "locked" || curr === "welcome") ? "genres" : curr);
+         setSyncError(""); // Limpa o erro se conseguimos os dados
+      }
     } finally {
       setIsLoading(false);
     }
-  }, [serverUrl, token, hwid, screen, logDebug, api, getFullUrl]);
+  }, [serverUrl, token, hwid, logDebug, api, fetchGenres]);
 
   // Resetar Cursor ao mudar de tela
   useEffect(() => {
@@ -475,6 +663,12 @@ export default function App() {
   // Navegação por Teclado
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignorar atalhos se o usuário estiver digitando em um input
+      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') {
+        if (e.key === 'Escape') (document.activeElement as HTMLElement).blur();
+        return;
+      }
+
       resetIdle();
       // Teclas de atalho globais
       if (e.key === '4') {
@@ -494,7 +688,10 @@ export default function App() {
         return;
       }
       if (e.key === 'p' || e.key === 'P') {
-        setCredits(prev => prev + 2);
+        const amount = 2;
+        setCredits(prev => prev + amount);
+        // Notificar server
+        api.post('/api/machine/add_credits', { hwid, token, amount, type: 'manual' }).catch(() => {});
         return;
       }
 
@@ -572,7 +769,7 @@ export default function App() {
           setScreen('genres');
         }
       } else if (screen === 'admin' || screen === 'reading' || screen === 'pix' || screen === 'queue') {
-        if (e.key === 'Escape' || e.key === 'Backspace' || e.key === 'ArrowLeft') {
+        if (e.key === 'Escape' || e.key === 'Backspace') {
           setScreen('genres');
         }
       }
@@ -595,7 +792,7 @@ export default function App() {
   }, [screen]);
 
   useEffect(() => {
-    if (token && isConfigLoaded) {
+    if (isConfigLoaded) {
       syncWithServer();
     }
   }, [token, syncWithServer, isConfigLoaded]);
@@ -605,9 +802,10 @@ export default function App() {
     if (screen === 'admin') {
       const fetchAdminGenres = async () => {
         try {
-          const res = await api.get(getFullUrl('/api/admin/genres'));
-          if (Array.isArray(res.data)) {
-            setGenres(res.data);
+          const res = await api.get(getFullUrl('/api/machine/genres'));
+          const data = res.data?.genres || res.data;
+          if (Array.isArray(data)) {
+            setGenres(data);
           }
         } catch (e) {
           // Fallback to sync if GET fails
@@ -616,7 +814,7 @@ export default function App() {
       };
       fetchAdminGenres();
     }
-  }, [screen, api, token, syncWithServer]);
+  }, [screen, api, token, syncWithServer, getFullUrl]);
 
   const handleLogoClick = () => {
     logDebug("Logo tapped");
@@ -756,6 +954,15 @@ export default function App() {
                 event.target.setVolume(100);
               }
 
+              if (state === (window as any).YT.PlayerState.PAUSED) {
+                // Forçar o play se pausou indevidamente
+                if (currentPlayingRef.current) {
+                  setTimeout(() => {
+                    if (ytPlayerRef.current) ytPlayerRef.current.playVideo();
+                  }, 1000);
+                }
+              }
+
               if (state === (window as any).YT.PlayerState.ENDED) {
                 const currentQueue = queueRef.current;
                 if (currentQueue.length > 0) {
@@ -867,11 +1074,38 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [isAttractMode, attractIndex, attractQueue, screen, currentPlaying]);
 
-  const confirmSelection = () => {
+  // Hide cursor after 3s of inactivity on TV/Web
+  useEffect(() => {
+    let timeout: any;
+    const handleActivity = () => {
+      document.body.style.cursor = 'default';
+      clearTimeout(timeout);
+      timeout = setTimeout(() => {
+        if (screen !== 'admin' && screen !== 'config') {
+          document.body.style.cursor = 'none';
+        }
+      }, 3000);
+    };
+
+    window.addEventListener('mousemove', handleActivity);
+    window.addEventListener('mousedown', handleActivity);
+    window.addEventListener('touchstart', handleActivity);
+    window.addEventListener('keydown', handleActivity);
+
+    return () => {
+      window.removeEventListener('mousemove', handleActivity);
+      window.removeEventListener('mousedown', handleActivity);
+      window.removeEventListener('touchstart', handleActivity);
+      window.removeEventListener('keydown', handleActivity);
+      clearTimeout(timeout);
+    };
+  }, [screen]);
+
+  const confirmSelection = async () => {
     if (!previewSong || credits <= 0) return;
     
-    setCredits(prev => prev - 1);
     const song = previewSong;
+    setCredits(prev => prev - 1);
     setPreviewSong(null);
     
     if (!currentPlaying) {
@@ -880,10 +1114,31 @@ export default function App() {
       if (song.youtube_id) {
         forcePlayYoutube(song.youtube_id);
       }
-      // Log play to server
-      api.post('/api/machine/play', { hwid, playlist_id: song.id }).catch(() => {});
     } else {
       setQueue(prev => [...prev, song]);
+      // Garantir que a reprodução continue se estiver pausada
+      if (ytPlayerRef.current) {
+        try {
+          const state = ytPlayerRef.current.getPlayerState();
+          if (state === 2) ytPlayerRef.current.playVideo();
+        } catch (e) {}
+      }
+      if (videoRef.current && videoRef.current.paused) {
+        videoRef.current.play().catch(() => {});
+      }
+    }
+
+    // Log play to server
+    try {
+      await api.post('/api/machine/play', { 
+        hwid, 
+        token,
+        playlist_id: song.id,
+        song_id: song.id,
+        credits_left: credits - 1
+      });
+    } catch (e) {
+      logDebug(`Erro ao notificar play ao servidor: ${e.message}`);
     }
   };
 
@@ -908,14 +1163,34 @@ export default function App() {
   };
 
   const saveSettings = async () => {
-    saveConfig({ serverUrl, token, mpToken, credits, revenue: totalRevenue });
+    const machineName = localStorage.getItem("MajuBox_MachineName") || `MajuBox-${hwid.substring(0, 4)}`;
+    const adminPass = localStorage.getItem("MajuBox_AdminPass") || "1234";
+
+    // Update main states
+    setServerUrl(serverUrlInput);
+    setToken(tokenInput);
+    setMpToken(mpTokenInput);
     
-    // Save license price to server
+    saveConfig({ serverUrl: serverUrlInput, token: tokenInput, mpToken: mpTokenInput, credits, revenue: totalRevenue });
+    
+    // Save info to server (Handshake/Sync)
     try {
-      await api.post(getFullUrl('/api/admin/config'), { license_price: licensePrice });
+      await api.post(getFullUrl('/api/machine/check'), { 
+        token: tokenInput,
+        hwid,
+        // Enviar todas as variações possíveis para garantir compatibilidade com o servidor remoto
+        name: machineName,
+        machine_name: machineName,
+        admin_pass: adminPass,
+        admin_password: adminPass,
+        password: adminPass,
+        mp_token: mpTokenInput,
+        serverUrl: serverUrlInput 
+      });
     } catch (e) {}
 
-    syncWithServer();
+    // Force sync with new values
+    setTimeout(() => syncWithServer(), 100);
     setScreen('genres');
   };
 
@@ -1078,10 +1353,13 @@ export default function App() {
               <div className="flex flex-col items-center gap-4 w-full max-w-xs">
                 <button 
                   disabled={isLoading}
-                  onClick={() => syncWithServer()}
-                  className="w-full bg-brand-red hover:bg-rose-600 text-white font-bold py-4 px-12 rounded-2xl text-xl shadow-lg disabled:opacity-50"
+                  onClick={() => {
+                    toggleFullscreen();
+                    syncWithServer();
+                  }}
+                  className="w-full bg-brand-red hover:bg-rose-600 text-white font-bold py-4 px-12 rounded-2xl text-xl shadow-lg disabled:opacity-50 transition-all active:scale-95"
                 >
-                  {isLoading ? 'CONECTANDO...' : 'INICIAR'}
+                  {isLoading ? 'CONECTANDO...' : 'ENTRAR NO MAJUBOX'}
                 </button>
                 
                 <button 
@@ -1113,7 +1391,10 @@ export default function App() {
             className="flex-1 flex flex-col"
           >
             <Header title="Gêneros Musicais" credits={credits} onBack={() => setScreen('welcome')} onRefresh={syncWithServer} loading={isLoading} />
-            <div className="flex-1 overflow-y-auto p-4 grid grid-cols-2 lg:grid-cols-3 gap-6">
+            <div 
+              ref={genresListRef}
+              className="flex-1 overflow-y-auto p-4 grid grid-cols-2 lg:grid-cols-3 gap-6 no-scrollbar touch-pan-y"
+            >
               {genres.map((genre, i) => (
                 <div 
                   key={genre.id}
@@ -1164,28 +1445,32 @@ export default function App() {
             className="flex-1 flex flex-col"
           >
             <Header title={selectedGenre?.name || "DVD's"} credits={credits} onBack={() => setScreen('genres')} />
-            <div className="flex-1 overflow-y-auto p-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+            <div 
+              ref={dvdsListRef}
+              className="flex-1 overflow-y-auto p-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 no-scrollbar touch-pan-y"
+            >
               {(() => {
                 const playlists = selectedGenre?.playlists || [];
                 const dvdsMap: Record<string, any> = {};
                 
                 playlists.forEach((p: any, idx) => {
-                  const dvdId = p.dvd_id || p.album_id || p.id || `dv-${idx}`;
-                  const dvdName = p.dvd_name || p.album_name || p.name || selectedGenre?.name || "DVD";
-                  const dvdCover = p.dvd_cover || p.album_cover || p.cover || p.cover_url || "";
+                  const dvdId = p.dvd_id || p.album_id || p.id || p.pk || `dv-${idx}`;
+                  const dvdName = p.dvd_name || p.album_name || p.name || p.nome || p.title || p.titulo || p.album || selectedGenre?.name || "DVD";
+                  const dvdCover = p.dvd_cover || p.album_cover || p.cover || p.cover_url || p.thumb || p.thumbnail || p.capa || "";
                   
                   if (!dvdsMap[dvdId]) {
                     dvdsMap[dvdId] = {
                       id: dvdId,
                       name: dvdName,
                       cover: dvdCover,
-                      artist: p.artist || (p.songs && p.songs.length > 0 ? p.songs[0].artist : "Vários Artistas"),
+                      artist: p.artist || p.artista || p.author || p.author_name || (p.songs && p.songs.length > 0 ? p.songs[0].artist : "Vários Artistas"),
                       songs: []
                     };
                   }
                   
                   // Tenta encontrar músicas em vários campos possíveis
-                  const pSongs = p.songs || p.musicas || p.items || [];
+                  const rawPSongs = p.songs || p.musicas || p.items || p.videos || p.tracks || [];
+                  const pSongs = Array.isArray(rawPSongs) ? rawPSongs : Object.values(rawPSongs);
                   
                   if (Array.isArray(pSongs) && pSongs.length > 0) {
                     pSongs.forEach((newSong: any) => {
@@ -1193,20 +1478,25 @@ export default function App() {
                         // Normalizar campos de vídeo
                         const song = {
                           ...newSong,
-                          youtube_id: newSong.youtube_id || newSong.youtube_url?.split('v=')?.[1] || newSong.youtube_url?.split('/')?.pop(),
-                          video_url: newSong.video_url || newSong.url_video
+                          id: newSong.id || newSong.pk || Math.random().toString(36).substring(7),
+                          title: newSong.title || newSong.titulo || newSong.name || newSong.nome || "Música sem título",
+                          artist: newSong.artist || newSong.artista || dvdsMap[dvdId].artist,
+                          youtube_id: newSong.youtube_id || newSong.yt_id || newSong.youtube_url?.split('v=')?.[1] || newSong.youtube_url?.split('/')?.pop(),
+                          video_url: newSong.video_url || newSong.url_video || newSong.url_flash
                         };
                         dvdsMap[dvdId].songs.push(song);
                       }
                     });
-                  } else if (p.title || p.titulo) {
-                    // Tratar P como uma música se tiver título e não tiver lista de sub-músicas
+                  } else if (p.title || p.titulo || p.name || p.nome) {
+                    // Trata o próprio P como uma música se tiver título e não tiver lista de sub-músicas
                     if (!dvdsMap[dvdId].songs.find((s: any) => s.id === p.id)) {
                       const song = {
                         ...p,
-                        title: p.title || p.titulo,
-                        youtube_id: p.youtube_id || p.youtube_url?.split('v=')?.[1],
-                        video_url: p.video_url || p.url_video
+                        id: p.id || p.pk || Math.random().toString(36).substring(7),
+                        title: p.title || p.titulo || p.name || p.nome,
+                        artist: p.artist || p.artista || dvdsMap[dvdId].artist,
+                        youtube_id: p.youtube_id || p.yt_id || p.youtube_url?.split('v=')?.[1] || p.youtube_url?.split('/')?.pop(),
+                        video_url: p.video_url || p.url_video || p.url_flash
                       };
                       dvdsMap[dvdId].songs.push(song);
                     }
@@ -1264,7 +1554,10 @@ export default function App() {
             className="flex-1 flex flex-col"
           >
             <Header title={selectedDVD?.name || "Músicas"} credits={credits} onBack={() => setScreen('dvds')} />
-            <div className="flex-1 overflow-y-auto px-4 divide-y divide-zinc-900">
+            <div 
+              ref={songsListRef}
+              className="flex-1 overflow-y-auto px-4 divide-y divide-zinc-900 no-scrollbar touch-pan-y"
+            >
               {selectedDVD && selectedDVD.songs && selectedDVD.songs.length > 0 ? (
                 selectedDVD.songs.map((song, i) => (
                   <div 
@@ -1545,8 +1838,8 @@ export default function App() {
                     <label className="text-[10px] font-bold text-zinc-600 uppercase ml-1">URL do Servidor (MajuBox Control)</label>
                     <input 
                       type="text" 
-                      value={serverUrl} 
-                      onChange={(e) => setServerUrl(e.target.value)}
+                      value={serverUrlInput} 
+                      onChange={(e) => setServerUrlInput(e.target.value)}
                       placeholder="https://sua-url.com"
                       className="w-full bg-zinc-900 border border-zinc-800 p-4 rounded-2xl outline-none focus:border-brand-red transition-all"
                     />
@@ -1555,8 +1848,8 @@ export default function App() {
                     <label className="text-[10px] font-bold text-zinc-600 uppercase ml-1">Token de Acesso (Gerado Automático)</label>
                     <input 
                       type="text" 
-                      value={token} 
-                      onChange={(e) => setToken(e.target.value)}
+                      value={tokenInput} 
+                      onChange={(e) => setTokenInput(e.target.value)}
                       placeholder="Insira o seu token"
                       className="w-full bg-zinc-900 border border-zinc-800 p-4 rounded-2xl outline-none focus:border-zinc-700 transition-all text-zinc-500"
                     />
@@ -1565,8 +1858,8 @@ export default function App() {
                     <label className="text-[10px] font-bold text-zinc-600 uppercase ml-1">Mercado Pago Token (Para Créditos)</label>
                     <input 
                       type="password" 
-                      value={mpToken} 
-                      onChange={(e) => setMpToken(e.target.value)}
+                      value={mpTokenInput} 
+                      onChange={(e) => setMpTokenInput(e.target.value)}
                       placeholder="APP_USR-..."
                       className="w-full bg-zinc-900 border border-zinc-800 p-4 rounded-2xl outline-none focus:border-brand-red transition-all"
                     />
@@ -1575,9 +1868,12 @@ export default function App() {
 
                   <button 
                     onClick={async () => {
-                      await saveConfig({ serverUrl, token, mpToken });
+                      setServerUrl(serverUrlInput);
+                      setToken(tokenInput);
+                      setMpToken(mpTokenInput);
+                      await saveConfig({ serverUrl: serverUrlInput, token: tokenInput, mpToken: mpTokenInput });
                       alert("Configurações salvas localmente!");
-                      syncWithServer();
+                      setTimeout(() => syncWithServer(), 100);
                     }}
                     className="w-full bg-emerald-600/20 text-emerald-500 py-4 rounded-2xl font-bold text-xs uppercase tracking-widest border border-emerald-500/30 hover:bg-emerald-600 hover:text-white transition-all shadow-lg"
                   >
@@ -1616,10 +1912,13 @@ export default function App() {
                       if (!channel || !genreId) return alert("Preencha canal e gênero!");
                       setIsLoading(true);
                       try {
-                        const res = await api.post(getFullUrl('/api/admin/youtube/import_channel'), {
+                        const res = await api.post(getFullUrl('/api/machine/youtube/import_channel'), {
+                          token,
+                          hwid,
                           channel_url: channel,
                           genre_id: parseInt(genreId),
-                          max_results: parseInt(limit)
+                          max_results: parseInt(limit),
+                          serverUrl: serverUrlInput
                         });
                         alert(res.data.ok ? `Sucesso! Importados ${res.data.inserted} vídeos.` : `Erro: ${res.data.error}`);
                         syncWithServer();
@@ -1649,16 +1948,24 @@ export default function App() {
                           onClick={async () => {
                             const name = (document.getElementById('manual-genre-name') as HTMLInputElement).value;
                             if (!name) return;
+                            setIsLoading(true);
                             try {
-                              const res = await api.post(getFullUrl('/api/admin/genres'), { name });
+                              // Python server uses /admin/api/genres for creating
+                              const res = await api.post(getFullUrl('/admin/api/genres'), { name, serverUrl: serverUrlInput });
                               if (res.data.message === "Gênero já existe") {
                                 alert("Este gênero já está cadastrado no servidor.");
+                              } else if (res.data.ok) {
+                                alert("Gênero criado com sucesso!");
+                                (document.getElementById('manual-genre-name') as HTMLInputElement).value = "";
+                                syncWithServer();
                               } else {
-                                alert("Gênero adicionado com sucesso!");
+                                alert("Erro: " + (res.data.error || "Verifique se está logado no painel central"));
                               }
-                              syncWithServer();
-                              (document.getElementById('manual-genre-name') as HTMLInputElement).value = "";
-                            } catch (e) {}
+                            } catch (e: any) {
+                              alert("Erro: " + (e.response?.data?.error || e.message));
+                            } finally {
+                              setIsLoading(false);
+                            }
                           }}
                           className="bg-brand-red text-white px-6 rounded-xl font-bold text-xs"
                         >

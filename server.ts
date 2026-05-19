@@ -235,21 +235,34 @@ async function startServer() {
 
     if (shouldProxy) {
       const cleanServerUrl = (serverUrl as string).replace(/\/$/, '');
+      if (!cleanServerUrl.startsWith('http')) {
+        // Fallback or skip
+        return next();
+      }
+      
       const targetUrl = `${cleanServerUrl}${req.path}`;
       
       try {
+        const payload = req.method !== 'GET' ? { ...req.body } : undefined;
+        if (payload && payload.serverUrl) {
+          delete payload.serverUrl;
+        }
+        
         console.log(`[PROXY] ${req.method} ${req.path} -> ${targetUrl}`);
+        if (payload) {
+          const keys = Object.keys(payload);
+          console.log(`[PROXY DATA KEYS]: ${keys.join(', ')}`);
+        }
         
         const response = await axios({
-          method: req.method,
+          method: req.method as any,
           url: targetUrl,
-          data: req.method !== 'GET' ? { ...req.body, serverUrl: undefined } : undefined,
+          data: payload,
           params: { ...req.query, serverUrl: undefined },
-          timeout: 20000,
+          timeout: 25000,
           headers: { 
             'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'X-Proxied-By': 'MajuBox-Proxy'
+            'Accept': 'application/json'
           }
         });
         
@@ -257,22 +270,28 @@ async function startServer() {
         return res.json(response.data);
       } catch (error: any) {
         const status = error.response?.status || 500;
-        let errorData = error.response?.data || { ok: false, error: error.message };
+        const errorDataBody = error.response?.data;
         
-        console.error(`[PROXY ERROR] ${req.method} ${req.path} -> ${targetUrl} | Status: ${status} | Error: ${error.message}`);
+        console.error(`[PROXY ERROR] ${req.method} ${req.path} -> ${targetUrl} | Status: ${status} | Msg: ${error.message}`);
         
-        res.set('X-Maju-Proxy-Error', error.message);
-        res.set('X-Maju-Target-Url', targetUrl);
-        
-        if (status === 404) {
-          errorData = { 
-            ok: false, 
-            error: `O servidor em ${serverUrl} retornou 404 (Não Encontrado) para a rota ${req.path}. Verifique se a URL está correta.`,
-            targetUrl
-          };
+        if (errorDataBody) {
+          const bodyStr = typeof errorDataBody === 'string' ? errorDataBody : JSON.stringify(errorDataBody);
+          console.error(`[PROXY ERROR BODY]:`, bodyStr.substring(0, 500));
         }
-
-        return res.status(status).json(errorData);
+        
+        let finalErrorData = errorDataBody;
+        if (typeof finalErrorData === 'string' && finalErrorData.trim().startsWith('<!doctype')) {
+           // If it's HTML, don't send the whole thing to the client
+           finalErrorData = { ok: false, error: `O servidor remoto retornou um erro interno (500). Verifique os logs do servidor em ${targetUrl}`, status };
+        } else if (typeof finalErrorData === 'string') {
+          try { finalErrorData = JSON.parse(finalErrorData); } catch(e) { finalErrorData = { ok: false, error: finalErrorData }; }
+        }
+        
+        if (!finalErrorData || typeof finalErrorData !== 'object') {
+           finalErrorData = { ok: false, error: error.message, status };
+        }
+        
+        return res.status(status).json(finalErrorData);
       }
     }
     next();
@@ -280,13 +299,18 @@ async function startServer() {
 
   // --- API Routes (Machine) ---
 
-  const handleMachineCheck = async (req, res) => {
-    const { hwid, token, name } = req.body;
+  const handleMachineCheck = async (req: express.Request, res: express.Response) => {
+    const { hwid, token, name, machine_name, admin_password, admin_pass } = req.body;
+    const finalName = name || machine_name;
+    const adminPass = admin_password || admin_pass;
     
-    if (!hwid) return res.status(400).json({ ok: false, error: "Missing HWID" });
+    if (!hwid && !token) return res.status(400).json({ ok: false, error: "Missing HWID or Token" });
 
     try {
-      let machine = await db.get("SELECT * FROM machines WHERE hwid = ?", [hwid]);
+      let machine = token ? await db.get("SELECT * FROM machines WHERE token = ?", [token]) : null;
+      if (!machine && hwid) {
+        machine = await db.get("SELECT * FROM machines WHERE hwid = ?", [hwid]);
+      }
 
       // Auto-Registration
       if (!machine) {
@@ -297,17 +321,27 @@ async function startServer() {
         initialExp.setDate(initialExp.getDate() + 3); 
         
         await db.run(
-          "INSERT INTO machines (id, hwid, name, token, license_exp) VALUES (?, ?, ?, ?, ?)",
-          [id, hwid, name || `MajuBox-${id}`, newToken, initialExp.toISOString()]
+          "INSERT INTO machines (id, hwid, name, token, license_exp, admin_pass) VALUES (?, ?, ?, ?, ?, ?)",
+          [id, hwid, finalName || `MajuBox-${id}`, newToken, initialExp.toISOString(), adminPass || '1234']
         );
         machine = await db.get("SELECT * FROM machines WHERE id = ?", [id]);
-      } else if (token && machine.token !== token) {
-        // Return 200 with error so App can show message
-        return res.json({ ok: false, error: "Token inválido para esta máquina. Verifique as configurações." });
+      } else {
+        // Update machine info if provided
+        const updates: string[] = [];
+        const params: any[] = [];
+        if (finalName) { updates.push("name = ?"); params.push(finalName); }
+        if (adminPass) { updates.push("admin_pass = ?"); params.push(adminPass); }
+        if (hwid && !machine.hwid) { updates.push("hwid = ?"); params.push(hwid); }
+        
+        if (updates.length > 0) {
+          params.push(machine.id);
+          await db.run(`UPDATE machines SET ${updates.join(", ")} WHERE id = ?`, params);
+          machine = await db.get("SELECT * FROM machines WHERE id = ?", [machine.id]);
+        }
       }
 
       const now = new Date();
-      let expDate = new Date(machine.license_exp);
+      let expDate = new Date(machine.license_exp || now.toISOString());
 
       // Simple payment verification if client provided a pending payment_id
       const { payment_id_to_verify } = req.body;
@@ -377,7 +411,8 @@ async function startServer() {
               payment_id: pendingPayment.mp_id,
               qr_code: pendingPayment.pix_qr,
               copy_paste: pendingPayment.pix_code,
-              amount: pendingPayment.amount
+              amount: pendingPayment.amount,
+              message: `Licença mensal: R$ ${pendingPayment.amount.toFixed(2)}. Libera por 30 dias após aprovado.`
             };
           } catch (e) {
             console.error("Erro Pix Liberação:", e);
@@ -407,26 +442,84 @@ async function startServer() {
       res.json({
         ok: true,
         machine_id: machine.id,
+        machine_name: machine.name,
         token: machine.token,
         license_ok,
         license_exp: machine.license_exp,
         license_price: currentLicensePrice,
         pix_liberation,
+        pix: pix_liberation, // Compatibility with some Python response keys
         genres,
         machine_pix: {
-          pix_key: machine.pix_key,
-          pix_name: machine.pix_name,
-          pix_city: machine.pix_city
+          pix_key: machine.pix_key || "",
+          pix_name: machine.pix_name || "",
+          pix_city: machine.pix_city || "",
+          mp_token_configured: !!machine.mp_token
         }
       });
     } catch (err) {
       console.error("Sync error:", err);
-      res.status(500).json({ ok: false, error: "Database error" });
+      res.status(500).json({ ok: false, error: "Database error during machine check" });
     }
   };
 
   app.post("/api/machine/check", handleMachineCheck);
   app.post("/api/proxy/check", handleMachineCheck);
+  app.post("/api/machine/register", handleMachineCheck);
+
+  app.get("/api/machine/genres", async (req, res) => {
+    try {
+      const genres = await db.all("SELECT id, name, cover_url, sort_order FROM genres ORDER BY sort_order, name");
+      res.json({ ok: true, genres });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: "Error fetching genres" });
+    }
+  });
+
+  app.post("/api/machine/config", async (req, res) => {
+    const { token, hwid, name, machine_name, admin_password, admin_pass, pix_key, pix_name, pix_city, mp_token } = req.body;
+    const finalName = name || machine_name;
+    const finalAdminPass = admin_password || admin_pass;
+
+    try {
+      let machine = token ? await db.get("SELECT * FROM machines WHERE token = ?", [token]) : null;
+      if (!machine && hwid) {
+        machine = await db.get("SELECT * FROM machines WHERE hwid = ?", [hwid]);
+      }
+
+      if (!machine) {
+        return res.status(404).json({ ok: false, error: "Máquina não encontrada para atualizar config" });
+      }
+
+      const updates: string[] = [];
+      const params: any[] = [];
+      
+      const mapping = [
+        ["name", finalName],
+        ["admin_pass", finalAdminPass],
+        ["pix_key", pix_key],
+        ["pix_name", pix_name],
+        ["pix_city", pix_city],
+        ["mp_token", mp_token]
+      ];
+
+      for (const [col, val] of mapping) {
+        if (val !== undefined) {
+          updates.push(`${col} = ?`);
+          params.push(val);
+        }
+      }
+
+      if (updates.length > 0) {
+        params.push(machine.id);
+        await db.run(`UPDATE machines SET ${updates.join(", ")} WHERE id = ?`, params);
+      }
+
+      res.json({ ok: true, machine_id: machine.id });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: "Error updating machine config" });
+    }
+  });
 
   const handlePixCreate = async (req, res) => {
     const { mp_token, amount, credits, description, token, hwid } = req.body;
