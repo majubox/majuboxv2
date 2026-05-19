@@ -536,22 +536,38 @@ export default function App() {
       }
 
       const data = response.data;
-      if (!data) throw new Error("Resposta do servidor vazia.");
+      if (!data) {
+        logDebug(`Resposta do servidor vazia. Status: ${response.status}`);
+        throw new Error(`Resposta do servidor vazia (Status: ${response.status})`);
+      }
+
+      // Se for string, tenta parsear (acontece se o proxy retornar HTML por erro do target)
+      let finalData = data;
+      if (typeof data === 'string') {
+        try {
+          finalData = JSON.parse(data);
+        } catch (e) {
+          if (data.includes('<!DOCTYPE html>') || data.includes('<html')) {
+            throw new Error(`O servidor em ${serverUrl} retornou uma página HTML em vez de JSON. Verifique a URL.`);
+          }
+          throw new Error(`O servidor retornou um formato inválido: ${data.substring(0, 50)}...`);
+        }
+      }
 
       // Sucesso no handshake ou pelo menos retorno válido
-      if (data.ok || data.status === 'ok' || data.machine_id || data.genres || data.id) {
-        logDebug(`Sync Success: Machine ID ${data.machine_id || data.id}`);
-        if (data.token && data.token !== token) {
-          setToken(data.token);
-          localStorage.setItem("MajuBox_Token", data.token);
+      if (finalData.ok || finalData.status === 'ok' || finalData.machine_id || finalData.genres || finalData.id) {
+        logDebug(`Sync Success: Machine ID ${finalData.machine_id || finalData.id}`);
+        if (finalData.token && finalData.token !== token) {
+          setToken(finalData.token);
+          localStorage.setItem("MajuBox_Token", finalData.token);
         }
 
-        if (data.license_price) setLicensePrice(data.license_price);
+        if (finalData.license_price) setLicensePrice(finalData.license_price);
 
-        const pix = data.pix_liberation || data.pix || data.pix_data;
+        const pix = finalData.pix_liberation || finalData.pix || finalData.pix_data;
         setLicenseInfo({
-          ok: data.license_ok !== false,
-          exp: data.license_exp || "",
+          ok: finalData.license_ok !== false,
+          exp: finalData.license_exp || "",
           pix: pix,
         });
 
@@ -559,7 +575,7 @@ export default function App() {
           localStorage.setItem("MajuBox_PendingLibPayment", pix.payment_id);
         }
 
-        const isLocked = data.license_ok === false;
+        const isLocked = finalData.license_ok === false;
         if (isLocked) {
           setScreen("locked");
           logDebug("Licença expirada.");
@@ -567,7 +583,7 @@ export default function App() {
           localStorage.removeItem("MajuBox_PendingLibPayment");
           
           // Se vier gêneros no check, usa eles
-          const rawGenresList = data.genres || data.categories || data.generos || data.categories_list;
+          const rawGenresList = finalData.genres || finalData.categories || finalData.generos || finalData.categories_list;
           if (rawGenresList) {
             const rawGenres = Array.isArray(rawGenresList) ? rawGenresList : Object.values(rawGenresList);
             const normalizedGenres = rawGenres.map((g: any) => {
@@ -589,7 +605,7 @@ export default function App() {
           setScreen(curr => (curr === "locked" || curr === "welcome") ? "genres" : curr);
         }
       } else {
-        const errMsg = data.error || data.message || "Erro no servidor (Check failed)";
+        const errMsg = finalData.error || finalData.message || "Erro no servidor (Check failed)";
         logDebug(`Servidor recusou handshake: ${errMsg}`);
         setSyncError(errMsg);
         // Tenta buscar gêneros mesmo se check falhar (pode ser que o server precise apenas de identificação)

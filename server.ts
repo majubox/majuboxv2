@@ -239,36 +239,53 @@ async function startServer() {
     if (shouldProxy) {
       const targetUrl = `${cleanServerUrl}${req.path}`;
       
-      try {
+      const tryProxy = async (url: string) => {
         const payload = req.method !== 'GET' ? { ...req.body } : undefined;
         if (payload && payload.serverUrl) {
           delete payload.serverUrl;
         }
         
-        // Remove serverUrl from query params for the proxied request
         const query = { ...req.query };
         delete query.serverUrl;
         
-        console.log(`[PROXY] ${req.method} ${req.path} -> ${targetUrl} (Host: ${host})`);
+        console.log(`[PROXY] ${req.method} ${req.path} -> ${url}`);
         
-        const response = await axios({
+        return await axios({
           method: req.method as any,
-          url: targetUrl,
+          url: url,
           data: payload,
           params: query,
-          timeout: 45000, // Increase for Render cold starts
+          timeout: 45000, 
           headers: { 
             'Content-Type': 'application/json',
             'Accept': 'application/json',
             'User-Agent': 'MajuBox-Proxy/1.0'
           },
-          validateStatus: () => true // Handle all status codes
+          validateStatus: () => true 
         });
+      };
+
+      try {
+        let response = await tryProxy(targetUrl);
         
+        // Fallback: If 404 and target path starts with /api, try stripping it
+        // This handles cases where the user's Python server doesn't use the /api prefix
+        if (response.status === 404 && req.path.startsWith('/api/')) {
+          const strippedPath = req.path.replace(/^\/api/, '');
+          const fallbackUrl = `${cleanServerUrl}${strippedPath}`;
+          console.log(`[PROXY FALLBACK] 404 on ${targetUrl}, trying ${fallbackUrl}`);
+          const fallbackRes = await tryProxy(fallbackUrl);
+          if (fallbackRes.status !== 404) {
+             response = fallbackRes;
+          }
+        }
+
         console.log(`[PROXY SUCCESS] ${req.method} ${req.path} -> ${response.status}`);
         res.set('X-Maju-Proxied', 'true');
         res.set('X-Maju-Target', cleanServerUrl);
-        return res.status(response.status).json(response.data);
+        
+        const responseData = response.data || { ok: true, message: "OK (No data)" };
+        return res.status(response.status).json(responseData);
       } catch (error: any) {
         const status = error.response?.status || 500;
         const errorDataBody = error.response?.data;
