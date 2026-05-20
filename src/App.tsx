@@ -15,7 +15,9 @@ import {
   X,
   RefreshCw,
   Trash2,
-  AlertTriangle
+  AlertTriangle,
+  FileText,
+  ShieldCheck
 } from 'lucide-react';
 import axios from 'axios';
 import { v4 as uuidv4 } from 'uuid';
@@ -65,6 +67,38 @@ interface SyncData {
 
 // --- Persistence Helpers ---
 const CONFIG_FILE = 'majubox_config.json';
+const TERMS_VERSION = '1.0';
+const TERMS_TEXT = `TERMOS DE USO E CONTRATO DE LICENÇA MAJUBOX
+
+1. OBJETO
+O MajuBox é um sistema de frontend, gerenciamento, organização e reprodução de conteúdos configurados pelo próprio cliente, usuário, operador ou responsável pela máquina.
+
+2. LICENÇA DE USO
+A contratação concede apenas licença de uso do software pelo prazo contratado. Não há venda, cessão ou transferência do código-fonte, marca, identidade visual, banco de dados do servidor ou propriedade intelectual do sistema.
+
+3. CONTEÚDO INSERIDO PELO CLIENTE
+O cliente é o único responsável por cadastrar canais, vídeos, músicas, imagens, capas, nomes, marcas, playlists, DVDs, links, chaves de API, chaves PIX, tokens de pagamento e qualquer outro conteúdo usado na máquina.
+
+4. DIREITOS AUTORAIS, IMAGEM E MARCAS
+O cliente declara que possui autorização, licença ou direito legal para usar todo conteúdo inserido no sistema. A fornecedora do MajuBox não fornece músicas, vídeos, filmes, imagens protegidas, canais de terceiros ou conteúdos protegidos por direitos autorais.
+
+5. RESPONSABILIDADE DO CLIENTE
+Qualquer reclamação, denúncia, notificação, cobrança, bloqueio, processo ou penalidade causada pelo uso de conteúdo sem autorização será de responsabilidade exclusiva do cliente responsável pela máquina.
+
+6. REMOÇÃO DE CONTEÚDO
+Caso exista reclamação, denúncia ou notificação sobre uso indevido de conteúdo, o cliente deverá remover imediatamente o conteúdo questionado. A fornecedora poderá bloquear a licença ou o acesso em caso de violação destes termos.
+
+7. PAGAMENTOS E LICENÇA
+A licença pode ser mensal, online e vinculada à máquina cadastrada. O sistema pode exigir conexão com o servidor para validar licença, sincronizar dados, gerar PIX, controlar pagamentos e atualizar informações.
+
+8. CHAVES E CONTAS DE TERCEIROS
+Quando o cliente cadastrar tokens, chaves de API, Mercado Pago, PIX ou contas de terceiros, o cliente declara ser autorizado a usar tais dados e assume responsabilidade pelo recebimento de pagamentos, tributos e uso dessas integrações.
+
+9. LIMITAÇÃO DE RESPONSABILIDADE
+A fornecedora responde apenas pelo funcionamento do software dentro dos limites contratados, não se responsabilizando pelo conteúdo escolhido, cadastrado, reproduzido ou explorado comercialmente pelo cliente.
+
+10. ACEITE ELETRÔNICO
+Ao clicar em “Li e aceito”, o cliente confirma que leu, entendeu e concorda com estes Termos de Uso e Contrato de Licença. O aceite poderá ser registrado com HWID, token, nome da máquina, data/hora, IP, versão do app e versão dos termos.`;
 
 const saveConfig = async (data: any) => {
   try {
@@ -116,6 +150,14 @@ const toggleFullscreen = () => {
       });
     }
   }
+};
+
+const normalizeServerBase = (url: string) => {
+  let base = (url || 'https://juke-2.onrender.com').trim();
+  if (!base.startsWith('http://') && !base.startsWith('https://')) base = 'https://' + base;
+  base = base.replace(/\/+$/, '');
+  base = base.replace(/\/admin\/login$/i, '').replace(/\/admin$/i, '').replace(/\/api$/i, '');
+  return base;
 };
 
 // --- Hooks ---
@@ -234,6 +276,13 @@ export default function App() {
   const [syncError, setSyncError] = useState('');
   const [debugLogs, setDebugLogs] = useState<string[]>([]);
   const [showDebug, setShowDebug] = useState(false);
+  const [termsAccepted, setTermsAccepted] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return localStorage.getItem('MajuBox_TermsAccepted') === 'true' &&
+      localStorage.getItem('MajuBox_TermsVersion') === TERMS_VERSION;
+  });
+  const [showTermsModal, setShowTermsModal] = useState(false);
+  const [termsChecked, setTermsChecked] = useState(false);
 
   const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || (window as any).Capacitor;
 
@@ -242,12 +291,47 @@ export default function App() {
     setDebugLogs(prev => [new Date().toLocaleTimeString() + ': ' + msg, ...prev].slice(0, 50));
   }, []);
 
+  const recordTermsAcceptance = useCallback(async () => {
+    const acceptedAt = new Date().toISOString();
+    localStorage.setItem('MajuBox_TermsAccepted', 'true');
+    localStorage.setItem('MajuBox_TermsVersion', TERMS_VERSION);
+    localStorage.setItem('MajuBox_TermsAcceptedAt', acceptedAt);
+    setTermsAccepted(true);
+    setShowTermsModal(false);
+    setTermsChecked(false);
+
+    try {
+      const machineName = localStorage.getItem('MajuBox_MachineName') || `MajuBox-${hwid.substring(0, 6)}`;
+      const payload = {
+        hwid,
+        token,
+        machine_name: machineName,
+        terms_version: TERMS_VERSION,
+        app_version: '1.0',
+        accepted_at: acceptedAt,
+        terms_hash: 'TERMS_VERSION_' + TERMS_VERSION
+      };
+      await axios.post(`${normalizeServerBase(serverUrl)}/machine/terms/accept`, payload, {
+        timeout: 15000,
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }
+      });
+      logDebug('Termos aceitos e sincronizados com o servidor.');
+    } catch (e: any) {
+      logDebug('Termos aceitos localmente; sincronização com servidor pendente: ' + (e?.message || e));
+    }
+  }, [hwid, token, serverUrl, logDebug]);
+
+  useEffect(() => {
+    if (isConfigLoaded && !termsAccepted) {
+      setShowTermsModal(true);
+    }
+  }, [isConfigLoaded, termsAccepted]);
+
   // --- API Helper ---
   const api = useMemo(() => ({
     post: async (path: string, data: any) => {
       if (Capacitor.isNativePlatform()) {
-        const base = serverUrl.startsWith('http') ? serverUrl : `https://${serverUrl}`;
-        const cleanBase = base.replace(/\/$/, '');
+        const cleanBase = normalizeServerBase(serverUrl);
         
         let finalUrl = path;
         if (path === '/machine/check') finalUrl = `${cleanBase}/machine/check`;
@@ -266,11 +350,9 @@ export default function App() {
         const response = await CapacitorHttp.post(options);
         return response;
       } else {
-        const base = serverUrl.startsWith('http') ? serverUrl : `https://${serverUrl}`;
-        const cleanBase = base.replace(/\/$/, '');
-        const cleanPath = path.startsWith('/') ? path : '/' + path;
-        const finalUrl = path.startsWith('http') ? path : `${cleanBase}${cleanPath}`;
-        logDebug(`Axios POST direto no servidor: ${finalUrl}`);
+        const cleanBase = normalizeServerBase(serverUrl);
+        const finalUrl = path.startsWith('http') ? path : `${cleanBase}${path.startsWith('/') ? path : '/' + path}`;
+        logDebug(`Axios POST direto: ${finalUrl}`);
         return await axios.post(finalUrl, data, { 
           timeout: 45000,
           headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }
@@ -279,8 +361,7 @@ export default function App() {
     },
     get: async (path: string) => {
       if (Capacitor.isNativePlatform()) {
-        const base = serverUrl.startsWith('http') ? serverUrl : `https://${serverUrl}`;
-        const cleanBase = base.replace(/\/$/, '');
+        const cleanBase = normalizeServerBase(serverUrl);
         let finalUrl = path.startsWith('http') ? path : `${cleanBase}${path.startsWith('/') ? path : '/' + path}`;
         
         logDebug(`CapacitorHttp GET: ${finalUrl}`);
@@ -292,11 +373,9 @@ export default function App() {
         const response = await CapacitorHttp.get(options);
         return response;
       } else {
-        const base = serverUrl.startsWith('http') ? serverUrl : `https://${serverUrl}`;
-        const cleanBase = base.replace(/\/$/, '');
-        const cleanPath = path.startsWith('/') ? path : '/' + path;
-        const finalUrl = path.startsWith('http') ? path : `${cleanBase}${cleanPath}`;
-        logDebug(`Axios GET direto no servidor: ${finalUrl}`);
+        const cleanBase = normalizeServerBase(serverUrl);
+        const finalUrl = path.startsWith('http') ? path : `${cleanBase}${path.startsWith('/') ? path : '/' + path}`;
+        logDebug(`Axios GET direto: ${finalUrl}`);
         return await axios.get(finalUrl, { 
           timeout: 45000,
           headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }
@@ -305,31 +384,25 @@ export default function App() {
     },
     delete: async (path: string) => {
       if (Capacitor.isNativePlatform()) {
-        const base = serverUrl.startsWith('http') ? serverUrl : `https://${serverUrl}`;
-        const cleanBase = base.replace(/\/$/, '');
+        const cleanBase = normalizeServerBase(serverUrl);
         let finalUrl = path.startsWith('http') ? path : `${cleanBase}${path.startsWith('/') ? path : '/' + path}`;
         const options = { url: finalUrl };
         return await CapacitorHttp.delete(options);
       } else {
-        const base = serverUrl.startsWith('http') ? serverUrl : `https://${serverUrl}`;
-        const cleanBase = base.replace(/\/$/, '');
-        const cleanPath = path.startsWith('/') ? path : '/' + path;
-        const finalUrl = path.startsWith('http') ? path : `${cleanBase}${cleanPath}`;
+        const cleanBase = normalizeServerBase(serverUrl);
+        const finalUrl = path.startsWith('http') ? path : `${cleanBase}${path.startsWith('/') ? path : '/' + path}`;
         return await axios.delete(finalUrl, { timeout: 15000 });
       }
     },
     put: async (path: string, data: any) => {
       if (Capacitor.isNativePlatform()) {
-        const base = serverUrl.startsWith('http') ? serverUrl : `https://${serverUrl}`;
-        const cleanBase = base.replace(/\/$/, '');
+        const cleanBase = normalizeServerBase(serverUrl);
         let finalUrl = path.startsWith('http') ? path : `${cleanBase}${path.startsWith('/') ? path : '/' + path}`;
         const options = { url: finalUrl, data, headers: { 'Content-Type': 'application/json' }};
         return await CapacitorHttp.put(options);
       } else {
-        const base = serverUrl.startsWith('http') ? serverUrl : `https://${serverUrl}`;
-        const cleanBase = base.replace(/\/$/, '');
-        const cleanPath = path.startsWith('/') ? path : '/' + path;
-        const finalUrl = path.startsWith('http') ? path : `${cleanBase}${cleanPath}`;
+        const cleanBase = normalizeServerBase(serverUrl);
+        const finalUrl = path.startsWith('http') ? path : `${cleanBase}${path.startsWith('/') ? path : '/' + path}`;
         return await axios.put(finalUrl, data, { timeout: 15000 });
       }
     }
@@ -338,8 +411,7 @@ export default function App() {
   const getFullUrl = useCallback((path: string) => {
     // No Capacitor, sempre URL completa
     if (Capacitor.isNativePlatform()) {
-      const base = serverUrl.startsWith('http') ? serverUrl : `https://${serverUrl}`;
-      const cleanBase = base.replace(/\/$/, '');
+      const cleanBase = normalizeServerBase(serverUrl);
       let cleanPath = path.startsWith('/') ? path : '/' + path;
       
       // Evita duplicar /api se a base já tiver
@@ -350,18 +422,10 @@ export default function App() {
       return `${cleanBase}${cleanPath}`;
     }
 
-    // No Browser/Static Site, chama o servidor real direto.
-    // Isso evita erro 404/resposta vazia em /machine/genres no domínio do app web.
     if (path.startsWith('http') || path.startsWith('data:')) return path;
 
-    const base = serverUrl.startsWith('http') ? serverUrl : `https://${serverUrl}`;
-    const cleanBase = base.replace(/\/$/, '');
-    let cleanPath = path.startsWith('/') ? path : '/' + path;
-    
-    if (cleanBase.endsWith('/api') && cleanPath.startsWith('/api/')) {
-      cleanPath = cleanPath.replace('/api', '');
-    }
-
+    const cleanBase = normalizeServerBase(serverUrl);
+    const cleanPath = path.startsWith('/') ? path : '/' + path;
     return `${cleanBase}${cleanPath}`;
   }, [serverUrl]);
 
@@ -1402,6 +1466,7 @@ export default function App() {
                 <button 
                   disabled={isLoading}
                   onClick={() => {
+                    if (!termsAccepted) { setShowTermsModal(true); return; }
                     toggleFullscreen();
                     syncWithServer();
                   }}
@@ -1416,6 +1481,13 @@ export default function App() {
                 >
                   <Settings className="w-4 h-4" />
                   <span className="text-xs font-bold uppercase tracking-widest">Configurações</span>
+                </button>
+                <button 
+                  onClick={() => setShowTermsModal(true)}
+                  className="flex items-center gap-2 text-zinc-500 hover:text-white transition-colors py-1"
+                >
+                  <FileText className="w-4 h-4" />
+                  <span className="text-xs font-bold uppercase tracking-widest">Termos de Uso</span>
                 </button>
 
                 {syncError && <p className="text-red-500 text-sm">{syncError}</p>}
@@ -1436,12 +1508,12 @@ export default function App() {
             key="genres"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            className="flex-1 flex flex-col"
+            className="flex-1 min-h-0 flex flex-col"
           >
             <Header title="Gêneros Musicais" credits={credits} onBack={() => setScreen('welcome')} onRefresh={syncWithServer} loading={isLoading} />
             <div 
               ref={genresListRef}
-              className="flex-1 overflow-y-auto p-4 grid grid-cols-2 lg:grid-cols-3 gap-6 no-scrollbar touch-pan-y"
+              className="flex-1 min-h-0 overflow-y-scroll p-4 grid grid-cols-2 lg:grid-cols-3 gap-6 no-scrollbar scroll-touch touch-pan-y overscroll-contain"
             >
               {genres.map((genre, i) => (
                 <div 
@@ -1480,7 +1552,7 @@ export default function App() {
                 </div>
               ))}
             </div>
-            <Footer active="genres" setScreen={setScreen} queueCount={queue.length} />
+            <Footer active="genres" setScreen={setScreen} queueCount={queue.length} onTerms={() => setShowTermsModal(true)} />
           </motion.div>
         )}
 
@@ -1490,12 +1562,12 @@ export default function App() {
             key="dvds"
             initial={{ x: 200, opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
-            className="flex-1 flex flex-col"
+            className="flex-1 min-h-0 flex flex-col"
           >
             <Header title={selectedGenre?.name || "DVD's"} credits={credits} onBack={() => setScreen('genres')} />
             <div 
               ref={dvdsListRef}
-              className="flex-1 overflow-y-auto p-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 no-scrollbar touch-pan-y"
+              className="flex-1 min-h-0 overflow-y-scroll p-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 no-scrollbar scroll-touch touch-pan-y overscroll-contain"
             >
               {(() => {
                 const playlists = selectedGenre?.playlists || [];
@@ -1599,12 +1671,12 @@ export default function App() {
             key="songs"
             initial={{ x: 200, opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
-            className="flex-1 flex flex-col"
+            className="flex-1 min-h-0 flex flex-col"
           >
             <Header title={selectedDVD?.name || "Músicas"} credits={credits} onBack={() => setScreen('dvds')} />
             <div 
               ref={songsListRef}
-              className="flex-1 overflow-y-auto px-4 divide-y divide-zinc-900 no-scrollbar touch-pan-y"
+              className="flex-1 min-h-0 overflow-y-scroll px-4 divide-y divide-zinc-900 no-scrollbar scroll-touch touch-pan-y overscroll-contain"
             >
               {selectedDVD && selectedDVD.songs && selectedDVD.songs.length > 0 ? (
                 selectedDVD.songs.map((song, i) => (
@@ -1824,10 +1896,10 @@ export default function App() {
             key="queue"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            className="flex-1 flex flex-col"
+            className="flex-1 min-h-0 flex flex-col"
           >
             <Header title="Fila de Reprodução" credits={credits} onBack={() => currentPlaying ? setScreen('playing') : setScreen('genres')} />
-            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+            <div className="flex-1 min-h-0 overflow-y-scroll p-4 space-y-3 no-scrollbar scroll-touch touch-pan-y overscroll-contain">
               {queue.length === 0 ? (
                 <div className="flex flex-col items-center justify-center p-12 text-zinc-800 text-center">
                   <ListMusic className="w-20 h-20 mb-6 opacity-20" />
@@ -1864,7 +1936,7 @@ export default function App() {
             key="admin"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            className="flex-1 flex flex-col p-6 overflow-y-auto"
+            className="flex-1 min-h-0 flex flex-col p-6 overflow-y-scroll no-scrollbar scroll-touch touch-pan-y overscroll-contain"
           >
             <div className="flex items-center justify-between mb-8">
               <h2 className="text-2xl font-bold flex items-center gap-3">
@@ -2176,6 +2248,66 @@ export default function App() {
         </motion.div>
       )}
 
+      {/* --- TERMS MODAL --- */}
+      {showTermsModal && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="fixed inset-0 z-[200] bg-black/95 p-5 md:p-10 flex items-center justify-center text-white"
+        >
+          <div className="w-full max-w-4xl max-h-[92vh] bg-zinc-950 border border-zinc-800 rounded-[2rem] shadow-2xl overflow-hidden flex flex-col">
+            <div className="p-6 border-b border-zinc-800 flex items-center gap-4">
+              <div className="w-12 h-12 rounded-2xl bg-brand-red/10 text-brand-red flex items-center justify-center">
+                <ShieldCheck className="w-7 h-7" />
+              </div>
+              <div className="flex-1">
+                <h2 className="text-xl md:text-2xl font-black uppercase tracking-tight">Termos de Uso e Contrato de Licença</h2>
+                <p className="text-xs text-zinc-500 font-bold uppercase tracking-widest">MajuBox • Versão {TERMS_VERSION}</p>
+              </div>
+              {termsAccepted && (
+                <button onClick={() => setShowTermsModal(false)} className="w-10 h-10 rounded-xl bg-zinc-900 flex items-center justify-center">
+                  <X className="w-5 h-5" />
+                </button>
+              )}
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 md:p-8 whitespace-pre-wrap text-sm md:text-base leading-relaxed text-zinc-300 bg-black/30">
+              {TERMS_TEXT}
+            </div>
+
+            <div className="p-6 border-t border-zinc-800 bg-zinc-950">
+              {!termsAccepted ? (
+                <>
+                  <label className="flex gap-3 items-start text-sm text-zinc-300 mb-5 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={termsChecked}
+                      onChange={(e) => setTermsChecked(e.target.checked)}
+                      className="mt-1 w-5 h-5 accent-red-600"
+                    />
+                    <span>Li e aceito os Termos de Uso e o Contrato de Licença MajuBox.</span>
+                  </label>
+                  <button
+                    disabled={!termsChecked}
+                    onClick={recordTermsAcceptance}
+                    className="w-full bg-brand-red disabled:bg-zinc-800 disabled:text-zinc-500 py-4 rounded-2xl font-black text-xs tracking-widest uppercase"
+                  >
+                    Aceitar e Continuar
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={() => setShowTermsModal(false)}
+                  className="w-full bg-zinc-900 border border-zinc-800 py-4 rounded-2xl font-black text-xs tracking-widest uppercase"
+                >
+                  Fechar Termos
+                </button>
+              )}
+            </div>
+          </div>
+        </motion.div>
+      )}
+
       {/* Global YouTube Player Container */}
       <div 
         className={`fixed inset-0 bg-black transition-all duration-300 ${screen === 'playing' ? 'opacity-100 z-50' : 'opacity-0 -z-50'}`}
@@ -2238,9 +2370,9 @@ function Header({ title, credits, onBack, onRefresh, loading }: { title: string,
   );
 }
 
-function Footer({ active, setScreen, queueCount }: { active: string, setScreen: (s: any) => void, queueCount: number }) {
+function Footer({ active, setScreen, queueCount, onTerms }: { active: string, setScreen: (s: any) => void, queueCount: number, onTerms?: () => void }) {
   return (
-    <div className="p-6 bg-brand-surface border-t border-zinc-900 grid grid-cols-3 gap-6">
+    <div className="p-6 bg-brand-surface border-t border-zinc-900 grid grid-cols-4 gap-4">
       <button 
         onClick={() => setScreen('genres')}
         className={`flex flex-col items-center gap-2 transition-colors ${active === 'genres' ? 'text-brand-red' : 'text-zinc-600'}`}
@@ -2262,6 +2394,13 @@ function Footer({ active, setScreen, queueCount }: { active: string, setScreen: 
       >
         <CreditCard className="w-6 h-6" />
         <span className="text-[10px] font-black tracking-widest">PIX</span>
+      </button>
+      <button 
+        onClick={() => onTerms && onTerms()}
+        className="flex flex-col items-center gap-2 transition-colors text-zinc-600"
+      >
+        <FileText className="w-6 h-6" />
+        <span className="text-[10px] font-black tracking-widest">TERMOS</span>
       </button>
     </div>
   );

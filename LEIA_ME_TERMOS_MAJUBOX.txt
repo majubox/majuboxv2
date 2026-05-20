@@ -1,0 +1,45 @@
+MajuBox - Pacote servidor + app web com aceite de termos
+
+O que foi adicionado:
+1. App web mostra Termos de Uso e Contrato de Licença na primeira abertura.
+2. Sistema só libera o uso após marcar o aceite.
+3. O menu do app tem botão Termos para abrir o contrato novamente.
+4. O aceite fica salvo no navegador/app e também é enviado ao servidor.
+5. Servidor recebe e salva o aceite nas rotas:
+   POST /machine/terms/accept
+   POST /api/machine/terms/accept
+   POST /proxy/terms/accept
+   POST /api/proxy/terms/accept
+6. Servidor tem rota para consultar texto dos termos:
+   GET /machine/terms
+   GET /api/machine/terms
+7. Servidor salva o aceite com HWID, token, nome da máquina, versão dos termos, IP e data/hora.
+8. Servidor usa DATA_DIR/DB_PATH para manter SQLite persistente no Render quando usar Persistent Disk.
+
+Render - servidor Python:
+Build Command:
+pip install -r requirements.txt
+
+Start Command:
+python server.py
+
+Environment Variables recomendadas:
+ADMIN_PASSWORD=1234
+MP_ACCESS_TOKEN=SEU_TOKEN_MERCADO_PAGO_DO_SERVIDOR
+YOUTUBE_API_KEY=SUA_KEY_YOUTUBE
+MAJUBOX_SECRET=coloque_uma_senha_grande
+DATA_DIR=/var/data
+DB_PATH=/var/data/majubox.db
+
+No Render, crie Persistent Disk com mount path:
+/var/data
+
+Render - app web Static Site:
+Build Command:
+npm install --include=dev && npx vite build
+
+Publish Directory:
+dist
+
+No app use URL do servidor:
+https://juke-2.onrender.com
