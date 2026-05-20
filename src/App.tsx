@@ -383,7 +383,6 @@ export default function App() {
     }
   }, [serverUrl, token, mpToken, credits, totalRevenue, isConfigLoaded]);
 
-  // Teclas de atalho para Smart TV / Controles
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Tecla "6" para inserir crédito manual
@@ -414,6 +413,7 @@ export default function App() {
   const genresListRef = useRef<HTMLDivElement>(null);
   const dvdsListRef = useRef<HTMLDivElement>(null);
   const songsListRef = useRef<HTMLDivElement>(null);
+  const touchStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
   
   useDraggableScroll(genresListRef);
   useDraggableScroll(dvdsListRef);
@@ -694,6 +694,87 @@ export default function App() {
   }, [previewSong, previewTimer]);
 
   // Navegação por Teclado
+
+  const getNavigationInfo = useCallback(() => {
+    let max = 0;
+    let columns = 1;
+
+    if (screen === 'genres') {
+      max = genres.length;
+      columns = window.innerWidth >= 1024 ? 3 : 2;
+    } else if (screen === 'dvds') {
+      const playlists = selectedGenre?.playlists || [];
+      const dvdsMap: Record<string, boolean> = {};
+      playlists.forEach((p: any, idx: number) => {
+        const dId = p.dvd_id || p.album_id || p.id || p.pk || `legacy-${idx}`;
+        dvdsMap[String(dId)] = true;
+      });
+      max = Object.keys(dvdsMap).length;
+      if (window.innerWidth >= 1024) columns = 4;
+      else if (window.innerWidth >= 768) columns = 3;
+      else columns = 2;
+    } else if (screen === 'songs') {
+      max = selectedDVD?.songs?.length || 0;
+      columns = 1;
+    }
+
+    return { max, columns };
+  }, [screen, genres.length, selectedGenre, selectedDVD]);
+
+  const moveCursorByTouch = useCallback((direction: 'up' | 'down' | 'left' | 'right') => {
+    if (!['genres', 'dvds', 'songs'].includes(screen)) {
+      if (direction === 'left' && screen === 'playing') setScreen('songs');
+      return;
+    }
+
+    const { max, columns } = getNavigationInfo();
+    if (max <= 0) return;
+
+    if (direction === 'down') {
+      setCursorIndex(prev => (prev + columns < max ? prev + columns : prev % columns));
+    } else if (direction === 'up') {
+      setCursorIndex(prev => (prev - columns >= 0 ? prev - columns : Math.max(0, max - 1)));
+    } else if (direction === 'right') {
+      setCursorIndex(prev => (prev + 1 < max ? prev + 1 : 0));
+    } else if (direction === 'left') {
+      if (screen === 'songs') setScreen('dvds');
+      else if (screen === 'dvds') setScreen('genres');
+      else setCursorIndex(prev => (prev - 1 >= 0 ? prev - 1 : max - 1));
+    }
+  }, [screen, getNavigationInfo]);
+
+  const handleTouchStart = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement;
+    if (target.closest('input, textarea, select, button')) return;
+    const t = e.touches[0];
+    touchStartRef.current = { x: t.clientX, y: t.clientY, time: Date.now() };
+  }, []);
+
+  const handleTouchEnd = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
+    const start = touchStartRef.current;
+    touchStartRef.current = null;
+    if (!start) return;
+
+    const target = e.target as HTMLElement;
+    if (target.closest('input, textarea, select, button')) return;
+
+    const t = e.changedTouches[0];
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    const absX = Math.abs(dx);
+    const absY = Math.abs(dy);
+    const elapsed = Date.now() - start.time;
+
+    // Toque normal continua funcionando como clique. Só swipe mexe no cursor/tela.
+    if (elapsed > 900 || Math.max(absX, absY) < 55) return;
+
+    if (absY > absX) {
+      moveCursorByTouch(dy < 0 ? 'down' : 'up');
+    } else {
+      moveCursorByTouch(dx < 0 ? 'right' : 'left');
+    }
+  }, [moveCursorByTouch]);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Ignorar atalhos se o usuário estiver digitando em um input
@@ -1237,7 +1318,11 @@ export default function App() {
   }
 
   return (
-    <div className="h-screen w-full bg-brand-dark flex flex-col font-sans select-none overflow-hidden">
+    <div
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+      className="h-screen w-full bg-brand-dark flex flex-col font-sans select-none overflow-hidden touch-area"
+    >
       <AnimatePresence mode="wait">
         
         {/* --- DEBUG CONSOLE --- */}
@@ -1426,7 +1511,7 @@ export default function App() {
             <Header title="Gêneros Musicais" credits={credits} onBack={() => setScreen('welcome')} onRefresh={syncWithServer} loading={isLoading} />
             <div 
               ref={genresListRef}
-              className="flex-1 overflow-y-auto p-4 grid grid-cols-2 lg:grid-cols-3 gap-6 no-scrollbar touch-pan-y"
+              className="flex-1 overflow-y-auto p-4 grid grid-cols-2 lg:grid-cols-3 gap-6 no-scrollbar touch-scroll"
             >
               {genres.map((genre, i) => (
                 <div 
@@ -1480,7 +1565,7 @@ export default function App() {
             <Header title={selectedGenre?.name || "DVD's"} credits={credits} onBack={() => setScreen('genres')} />
             <div 
               ref={dvdsListRef}
-              className="flex-1 overflow-y-auto p-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 no-scrollbar touch-pan-y"
+              className="flex-1 overflow-y-auto p-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 no-scrollbar touch-scroll"
             >
               {(() => {
                 const playlists = selectedGenre?.playlists || [];
@@ -1589,7 +1674,7 @@ export default function App() {
             <Header title={selectedDVD?.name || "Músicas"} credits={credits} onBack={() => setScreen('dvds')} />
             <div 
               ref={songsListRef}
-              className="flex-1 overflow-y-auto px-4 divide-y divide-zinc-900 no-scrollbar touch-pan-y"
+              className="flex-1 overflow-y-auto px-4 divide-y divide-zinc-900 no-scrollbar touch-scroll"
             >
               {selectedDVD && selectedDVD.songs && selectedDVD.songs.length > 0 ? (
                 selectedDVD.songs.map((song, i) => (

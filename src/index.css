@@ -9,9 +9,18 @@
 }
 
 @layer base {
+  html, body, #root {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+  }
+
   body {
     @apply bg-brand-dark text-white overflow-hidden select-none;
     -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    overscroll-behavior: none;
   }
 }
 
@@ -36,4 +45,23 @@
     transform: scale(1.05);
     opacity: 0.8;
   }
+}
+
+
+/* Correção para Android/WebView: permite arrastar com o dedo nas listas */
+.touch-scroll {
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y !important;
+}
+
+/* Área geral aceita gestos horizontais/verticais sem bloquear clique */
+.touch-area {
+  touch-action: pan-x pan-y;
+}
+
+button, .selectable-item {
+  touch-action: manipulation;
 }
