@@ -11,25 +11,13 @@ import { URL } from "url";
 
 // --- YouTube API Helpers ---
 const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY || "";
-const YOUTUBE_MIN_SECONDS = 2 * 60;
-const YOUTUBE_MAX_SECONDS = 7 * 60;
-
-function isProbableShortVideo(video: any): boolean {
-  const title = (video.title || "").toLowerCase();
-  const dur = video.duration_seconds || 0;
-  if (!dur || dur < YOUTUBE_MIN_SECONDS || dur > YOUTUBE_MAX_SECONDS) return true;
-  if (title.includes("#shorts") || title.includes("#short") || title.includes("youtube shorts")) return true;
-  return false;
-}
 
 async function youtubeApiGet(path: string, params: any) {
-  const key = await db.get("SELECT value FROM config WHERE key = 'youtube_api_key'");
-  const apiKey = YOUTUBE_API_KEY || key?.value || "";
-  if (!apiKey) {
+  if (!YOUTUBE_API_KEY) {
     throw new Error("Chave YouTube API não configurada no servidor (YOUTUBE_API_KEY).");
   }
   const searchParams = new URLSearchParams(params);
-  searchParams.set("key", apiKey);
+  searchParams.set("key", YOUTUBE_API_KEY);
   const url = `https://www.googleapis.com/youtube/v3/${path}?${searchParams.toString()}`;
   const res = await axios.get(url, { headers: { 'User-Agent': 'MajuBox/1.0' } });
   return res.data;
@@ -49,14 +37,7 @@ async function resolveYoutubeChannel(channelHint: string) {
   if (channelHint.startsWith("UC") && channelHint.length >= 20) {
     channelId = channelHint;
   } else {
-    let query = channelHint;
-    if (channelHint.includes("youtube.com/@")) {
-      const parts = channelHint.split("@");
-      query = "@" + parts[1].split("/")[0];
-    } else if (channelHint.startsWith("@")) {
-      query = channelHint;
-    }
-    
+    const query = channelHint.startsWith("@") ? channelHint.substring(1) : channelHint;
     const data = await youtubeApiGet("search", { part: "snippet", type: "channel", q: query, maxResults: 1 });
     if (!data.items?.length) throw new Error("Canal não encontrado no YouTube.");
     channelId = data.items[0].snippet.channelId || data.items[0].id.channelId;
@@ -105,15 +86,12 @@ async function fetchChannelVideos(playlistId: string, maxResults: number = 50) {
       const sn = item.snippet;
       const cd = item.contentDetails;
       const thumb = sn.thumbnails.maxres?.url || sn.thumbnails.high?.url || sn.thumbnails.medium?.url;
-      const video = {
+      result.push({
         youtube_id: item.id,
         title: sn.title,
         duration_seconds: iso8601DurationToSeconds(cd.duration),
         cover_url: thumb
-      };
-      if (!isProbableShortVideo(video)) {
-        result.push(video);
-      }
+      });
     }
   }
   return result;
@@ -142,9 +120,6 @@ async function initDb() {
       pix_name TEXT,
       pix_city TEXT,
       mp_token TEXT, -- Token MP do dono da máquina (para créditos)
-      app_version TEXT,
-      last_seen TEXT,
-      last_ip TEXT,
       created_at TEXT DEFAULT (datetime('now'))
     );
 
@@ -349,7 +324,7 @@ async function startServer() {
   // --- API Routes (Machine) ---
 
   const handleMachineCheck = async (req: express.Request, res: express.Response) => {
-    const { hwid, token, name, machine_name, admin_password, admin_pass, app_version } = req.body;
+    const { hwid, token, name, machine_name, admin_password, admin_pass } = req.body;
     const finalName = name || machine_name;
     const adminPass = admin_password || admin_pass;
     
@@ -381,11 +356,7 @@ async function startServer() {
         if (finalName) { updates.push("name = ?"); params.push(finalName); }
         if (adminPass) { updates.push("admin_pass = ?"); params.push(adminPass); }
         if (hwid && !machine.hwid) { updates.push("hwid = ?"); params.push(hwid); }
-        if (app_version) { updates.push("app_version = ?"); params.push(app_version); }
         
-        updates.push("last_seen = datetime('now')");
-        updates.push("last_ip = ?"); params.push(req.ip);
-
         if (updates.length > 0) {
           params.push(machine.id);
           await db.run(`UPDATE machines SET ${updates.join(", ")} WHERE id = ?`, params);
@@ -396,35 +367,42 @@ async function startServer() {
       const now = new Date();
       let expDate = new Date(machine.license_exp || now.toISOString());
 
-      const license_ok = expDate > now;
-      if (!license_ok && machine.status === 'active') {
-         // Auto-lock if expired
-         await db.run("UPDATE machines SET status = 'expired' WHERE id = ?", [machine.id]);
-      } else if (license_ok && machine.status === 'expired') {
-         // Auto-unlock if paid
-         await db.run("UPDATE machines SET status = 'active' WHERE id = ?", [machine.id]);
+      // Simple payment verification if client provided a pending payment_id
+      const { payment_id_to_verify } = req.body;
+      const adminToken = process.env.MP_ACCESS_TOKEN;
+      
+      if (payment_id_to_verify && adminToken) {
+        try {
+          const checkRes = await axios.get(`https://api.mercadopago.com/v1/payments/${payment_id_to_verify}`, {
+            headers: { 'Authorization': `Bearer ${adminToken}` }
+          });
+          if (checkRes.data.status === 'approved') {
+             // Mark as paid and extend license
+             await db.run("UPDATE payments SET status = 'paid', paid_at = ? WHERE id = ? OR mp_id = ?", [new Date().toISOString(), payment_id_to_verify, payment_id_to_verify.toString()]);
+             expDate = new Date();
+             expDate.setDate(expDate.getDate() + 30);
+             await db.run("UPDATE machines SET license_exp = ? WHERE id = ?", [expDate.toISOString(), machine.id]);
+          }
+        } catch (e) {
+          console.error("Erro verifying payment:", e);
+        }
       }
+
+      const license_ok = expDate > now;
 
       // Se a licença estiver vencida, preparamos o PIX de liberação (da MajuBox/Servidor)
       let pix_liberation = null;
       if (!license_ok) {
         const priceConfig = await db.get("SELECT value FROM config WHERE key = 'license_price'");
         const amount = priceConfig ? parseFloat(priceConfig.value) : 15.00;
-        const mpKey = await db.get("SELECT value FROM config WHERE key = 'mp_token'");
-        const adminToken = process.env.MP_ACCESS_TOKEN || mpKey?.value;
 
         if (adminToken) {
           try {
+            // Check if there's already a pending payment for this machine
             let pendingPayment = await db.get(
               "SELECT * FROM payments WHERE machine_id = ? AND status = 'pending' AND payment_type = 'license' ORDER BY created_at DESC LIMIT 1",
               [machine.id]
             );
-
-            // Se o valor mudou, cancela o pendente antigo
-            if (pendingPayment && Math.abs(pendingPayment.amount - amount) > 0.01) {
-              await db.run("UPDATE payments SET status = 'cancelled' WHERE id = ?", [pendingPayment.id]);
-              pendingPayment = null;
-            }
 
             if (!pendingPayment) {
               const mpRes = await axios.post("https://api.mercadopago.com/v1/payments", {
@@ -463,6 +441,8 @@ async function startServer() {
           } catch (e) {
             console.error("Erro Pix Liberação:", e);
           }
+        } else {
+          pix_liberation = { amount, message: "Configure MP_ACCESS_TOKEN no servidor." };
         }
       }
 
@@ -479,6 +459,7 @@ async function startServer() {
         g.playlists = songs;
       }
 
+      // Get license price from config
       const priceConfig = await db.get("SELECT value FROM config WHERE key = 'license_price'");
       const currentLicensePrice = priceConfig ? priceConfig.value : "15.00";
 
@@ -491,7 +472,7 @@ async function startServer() {
         license_exp: machine.license_exp,
         license_price: currentLicensePrice,
         pix_liberation,
-        pix: pix_liberation,
+        pix: pix_liberation, // Compatibility with some Python response keys
         genres,
         machine_pix: {
           pix_key: machine.pix_key || "",
@@ -663,91 +644,18 @@ async function startServer() {
   app.post("/machine/pix/status", handlePixStatus);
   app.post("/api/proxy/pix/status", handlePixStatus);
 
-  app.post("/api/machine/add_credits", async (req, res) => {
-    const { token, hwid, amount, credits } = req.body;
-    try {
-      let machine = token ? await db.get("SELECT id FROM machines WHERE token = ?", [token]) : null;
-      if (!machine && hwid) machine = await db.get("SELECT id FROM machines WHERE hwid = ?", [hwid]);
-      
-      if (machine) {
-        await db.run("INSERT INTO machine_revenue_log (machine_id, amount) VALUES (?, ?)", [machine.id, parseFloat(amount || 0)]);
-        return res.json({ ok: true });
-      }
-      res.status(404).json({ ok: false, error: "Máquina não encontrada" });
-    } catch (e) {
-      res.status(500).json({ ok: false, error: "Database error" });
-    }
-  });
-
   const handlePlay = async (req, res) => {
-    const { hwid, token, playlist_id } = req.body;
-    let machineId = null;
-    if (token) {
-      const m = await db.get("SELECT id FROM machines WHERE token = ?", [token]);
-      machineId = m?.id;
-    }
-    if (!machineId && hwid) {
-      const m = await db.get("SELECT id FROM machines WHERE hwid = ?", [hwid]);
-      machineId = m?.id;
-    }
-    
-    if (machineId) {
-      await db.run("INSERT INTO plays (machine_id, playlist_id) VALUES (?, ?)", [machineId, playlist_id]);
+    const { hwid, playlist_id } = req.body;
+    if (hwid) {
+      const machine = await db.get("SELECT id FROM machines WHERE hwid = ?", [hwid]);
+      if (machine) {
+        await db.run("INSERT INTO plays (machine_id, playlist_id) VALUES (?, ?)", [machine.id, playlist_id]);
+      }
     }
     res.json({ ok: true });
   };
   app.post("/api/machine/play", handlePlay);
   app.post("/machine/play", handlePlay);
-
-  app.post("/api/pix/webhook", async (req, res) => {
-    const { data, id, type } = req.body;
-    const mpId = data?.id || id;
-    
-    if (!mpId) return res.status(200).send("OK");
-    
-    const mpKey = await db.get("SELECT value FROM config WHERE key = 'mp_token'");
-    const adminToken = process.env.MP_ACCESS_TOKEN || mpKey?.value;
-
-    if (!adminToken) return res.status(200).send("OK");
-
-    try {
-      const response = await axios.get(`https://api.mercadopago.com/v1/payments/${mpId}`, {
-        headers: { 'Authorization': `Bearer ${adminToken}` }
-      });
-      
-      const { status, transaction_amount, external_reference } = response.data;
-      
-      if (status === 'approved') {
-        const payment = await db.get("SELECT * FROM payments WHERE mp_id = ? AND status = 'pending'", [mpId.toString()]);
-        
-        if (payment) {
-          if (payment.payment_type === 'license') {
-            const expDate = new Date();
-            expDate.setDate(expDate.getDate() + 30);
-            
-            await db.run("UPDATE machines SET license_exp = ?, status = 'active' WHERE id = ?", [expDate.toISOString(), payment.machine_id]);
-            await db.run("UPDATE payments SET status = 'paid', paid_at = ? WHERE id = ?", [new Date().toISOString(), payment.id]);
-            
-            // Record license revenue
-            const month = new Date().toISOString().substring(0, 7);
-            const existing = await db.get("SELECT id FROM license_revenue WHERE machine_id = ? AND month = ?", [payment.machine_id, month]);
-            if (existing) {
-              await db.run("UPDATE license_revenue SET total = total + ? WHERE id = ?", [payment.amount, existing.id]);
-            } else {
-              await db.run("INSERT INTO license_revenue (machine_id, month, total) VALUES (?, ?, ?)", [payment.machine_id, month, payment.amount]);
-            }
-          } else if (payment.payment_type === 'credits') {
-            // Usually handled by status endpoint, but we mark as paid anyway
-            await db.run("UPDATE payments SET status = 'paid', paid_at = ? WHERE mp_id = ?", [new Date().toISOString(), mpId.toString()]);
-          }
-        }
-      }
-    } catch (e) {
-      console.error("Webhook Error:", e);
-    }
-    
-    res.status(200).send("OK");
-  });
 
   // --- Admin API (Manage Content) ---
 
@@ -949,46 +857,22 @@ async function startServer() {
   app.get("/api/admin/config", async (req, res) => {
     try {
       const price = await db.get("SELECT value FROM config WHERE key = 'license_price'");
-      const mpToken = await db.get("SELECT value FROM config WHERE key = 'mp_token'");
-      const yid = await db.get("SELECT value FROM config WHERE key = 'youtube_api_key'");
-      const pixKey = await db.get("SELECT value FROM config WHERE key = 'pix_key'");
-      const pixName = await db.get("SELECT value FROM config WHERE key = 'pix_name'");
-      const pixCity = await db.get("SELECT value FROM config WHERE key = 'pix_city'");
-      
-      res.json({ 
-        ok: true, 
-        license_price: price?.value, 
-        mp_configured: !!(process.env.MP_ACCESS_TOKEN || mpToken?.value),
-        youtube_configured: !!(process.env.YOUTUBE_API_KEY || yid?.value),
-        pix_key: pixKey?.value,
-        pix_name: pixName?.value,
-        pix_city: pixCity?.value
-      });
+      res.json({ ok: true, license_price: price?.value });
     } catch (e) {
       res.status(500).json({ ok: false, error: "Database error" });
     }
   });
 
   app.post("/api/admin/config", async (req, res) => {
-    const { license_price, mp_token, youtube_api_key, pix_key, pix_name, pix_city } = req.body;
+    const { license_price } = req.body;
     try {
-      if (license_price) await db.run("INSERT OR REPLACE INTO config (key, value) VALUES ('license_price', ?)", [license_price]);
-      if (mp_token) await db.run("INSERT OR REPLACE INTO config (key, value) VALUES ('mp_token', ?)", [mp_token]);
-      if (youtube_api_key) await db.run("INSERT OR REPLACE INTO config (key, value) VALUES ('youtube_api_key', ?)", [youtube_api_key]);
-      if (pix_key) await db.run("INSERT OR REPLACE INTO config (key, value) VALUES ('pix_key', ?)", [pix_key]);
-      if (pix_name) await db.run("INSERT OR REPLACE INTO config (key, value) VALUES ('pix_name', ?)", [pix_name]);
-      if (pix_city) await db.run("INSERT OR REPLACE INTO config (key, value) VALUES ('pix_city', ?)", [pix_city]);
+      if (license_price) {
+        await db.run("UPDATE config SET value = ? WHERE key = 'license_price'", [license_price]);
+      }
       res.json({ ok: true });
     } catch (e) {
       res.status(500).json({ ok: false, error: "Database error" });
     }
-  });
-
-  app.post("/api/admin/revenue/reset", async (req, res) => {
-    const { month } = req.body;
-    if (!month) return res.status(400).json({ ok: false, error: "Mês obrigatório" });
-    await db.run("DELETE FROM license_revenue WHERE month = ?", [month]);
-    res.json({ ok: true });
   });
 
   app.get("/api/health", (req, res) => {

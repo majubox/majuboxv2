@@ -197,20 +197,10 @@ export default function App() {
   const [token, setToken] = useState('');
   const [mpToken, setMpToken] = useState(''); // New: Mercado Pago token for credits
   
-  // Extra Config States
-  const [pixKey, setPixKey] = useState('');
-  const [pixName, setPixName] = useState('');
-  const [pixCity, setPixCity] = useState('');
-  const [youtubeApiKey, setYoutubeApiKey] = useState('');
-
   // Local input states for Admin screen to prevent infinite sync loops while typing
   const [serverUrlInput, setServerUrlInput] = useState(serverUrl);
   const [tokenInput, setTokenInput] = useState('');
   const [mpTokenInput, setMpTokenInput] = useState('');
-  const [pixKeyInput, setPixKeyInput] = useState('');
-  const [pixNameInput, setPixNameInput] = useState('');
-  const [pixCityInput, setPixCityInput] = useState('');
-  const [youtubeApiKeyInput, setYoutubeApiKeyInput] = useState('');
   
   const [licensePrice, setLicensePrice] = useState('');
   const [licenseInfo, setLicenseInfo] = useState<{ ok: boolean; exp: string; pix?: any } | null>(null);
@@ -276,9 +266,12 @@ export default function App() {
         const response = await CapacitorHttp.post(options);
         return response;
       } else {
-        logDebug(`Axios POST (Local Proxy): ${path}`);
-        const payload = { ...data, serverUrl };
-        return await axios.post(path, payload, { 
+        const base = serverUrl.startsWith('http') ? serverUrl : `https://${serverUrl}`;
+        const cleanBase = base.replace(/\/$/, '');
+        const cleanPath = path.startsWith('/') ? path : '/' + path;
+        const finalUrl = path.startsWith('http') ? path : `${cleanBase}${cleanPath}`;
+        logDebug(`Axios POST direto no servidor: ${finalUrl}`);
+        return await axios.post(finalUrl, data, { 
           timeout: 45000,
           headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }
         });
@@ -299,10 +292,12 @@ export default function App() {
         const response = await CapacitorHttp.get(options);
         return response;
       } else {
-        logDebug(`Axios GET (Local Proxy): ${path}`);
-        // We pass serverUrl in a header for GET requests
-        return await axios.get(path, { 
-          params: { serverUrl },
+        const base = serverUrl.startsWith('http') ? serverUrl : `https://${serverUrl}`;
+        const cleanBase = base.replace(/\/$/, '');
+        const cleanPath = path.startsWith('/') ? path : '/' + path;
+        const finalUrl = path.startsWith('http') ? path : `${cleanBase}${cleanPath}`;
+        logDebug(`Axios GET direto no servidor: ${finalUrl}`);
+        return await axios.get(finalUrl, { 
           timeout: 45000,
           headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }
         });
@@ -316,10 +311,11 @@ export default function App() {
         const options = { url: finalUrl };
         return await CapacitorHttp.delete(options);
       } else {
-        return await axios.delete(path, { 
-          params: { serverUrl },
-          timeout: 15000
-        });
+        const base = serverUrl.startsWith('http') ? serverUrl : `https://${serverUrl}`;
+        const cleanBase = base.replace(/\/$/, '');
+        const cleanPath = path.startsWith('/') ? path : '/' + path;
+        const finalUrl = path.startsWith('http') ? path : `${cleanBase}${cleanPath}`;
+        return await axios.delete(finalUrl, { timeout: 15000 });
       }
     },
     put: async (path: string, data: any) => {
@@ -330,7 +326,11 @@ export default function App() {
         const options = { url: finalUrl, data, headers: { 'Content-Type': 'application/json' }};
         return await CapacitorHttp.put(options);
       } else {
-        return await axios.put(path, { ...data, serverUrl }, { timeout: 15000 });
+        const base = serverUrl.startsWith('http') ? serverUrl : `https://${serverUrl}`;
+        const cleanBase = base.replace(/\/$/, '');
+        const cleanPath = path.startsWith('/') ? path : '/' + path;
+        const finalUrl = path.startsWith('http') ? path : `${cleanBase}${cleanPath}`;
+        return await axios.put(finalUrl, data, { timeout: 15000 });
       }
     }
   }), [logDebug, serverUrl]);
@@ -350,13 +350,9 @@ export default function App() {
       return `${cleanBase}${cleanPath}`;
     }
 
-    // No Browser, as rotas /api/, /machine/ e /proxy/ passam pelo proxy local em server.ts
-    // Exceto se for uma URL absoluta
+    // No Browser/Static Site, chama o servidor real direto.
+    // Isso evita erro 404/resposta vazia em /machine/genres no domínio do app web.
     if (path.startsWith('http') || path.startsWith('data:')) return path;
-
-    if (path.startsWith('/api/') || path.startsWith('/machine/') || path.startsWith('/proxy/')) {
-      return path;
-    }
 
     const base = serverUrl.startsWith('http') ? serverUrl : `https://${serverUrl}`;
     const cleanBase = base.replace(/\/$/, '');
@@ -586,14 +582,6 @@ export default function App() {
         }
 
         if (finalData.license_price) setLicensePrice(finalData.license_price);
-
-        // Populate machine pix if available
-        if (finalData.machine_pix) {
-          const mpix = finalData.machine_pix;
-          if (mpix.pix_key) { setPixKey(mpix.pix_key); setPixKeyInput(mpix.pix_key); }
-          if (mpix.pix_name) { setPixName(mpix.pix_name); setPixNameInput(mpix.pix_name); }
-          if (mpix.pix_city) { setPixCity(mpix.pix_city); setPixCityInput(mpix.pix_city); }
-        }
 
         const pix = finalData.pix_liberation || finalData.pix || finalData.pix_data;
         setLicenseInfo({
@@ -1230,35 +1218,21 @@ export default function App() {
     setServerUrl(serverUrlInput);
     setToken(tokenInput);
     setMpToken(mpTokenInput);
-    setPixKey(pixKeyInput);
-    setPixName(pixNameInput);
-    setPixCity(pixCityInput);
-    setYoutubeApiKey(youtubeApiKeyInput);
     
-    saveConfig({ 
-      serverUrl: serverUrlInput, 
-      token: tokenInput, 
-      mpToken: mpTokenInput, 
-      pixKey: pixKeyInput,
-      pixName: pixNameInput,
-      pixCity: pixCityInput,
-      youtubeApiKey: youtubeApiKeyInput,
-      credits, 
-      revenue: totalRevenue 
-    });
+    saveConfig({ serverUrl: serverUrlInput, token: tokenInput, mpToken: mpTokenInput, credits, revenue: totalRevenue });
     
     // Save info to server (Handshake/Sync)
     try {
-      await api.post(getFullUrl('/machine/config'), { 
+      await api.post(getFullUrl('/machine/check'), { 
         token: tokenInput,
         hwid,
+        // Enviar todas as variações possíveis para garantir compatibilidade com o servidor remoto
         name: machineName,
+        machine_name: machineName,
         admin_pass: adminPass,
-        pix_key: pixKeyInput,
-        pix_name: pixNameInput,
-        pix_city: pixCityInput,
+        admin_password: adminPass,
+        password: adminPass,
         mp_token: mpTokenInput,
-        youtube_api_key: youtubeApiKeyInput,
         serverUrl: serverUrlInput 
       });
     } catch (e) {}
@@ -1940,54 +1914,15 @@ export default function App() {
                     <p className="text-[9px] text-zinc-600 px-1 italic">Cada máquina usa sua própria chave de créditos.</p>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-zinc-600 uppercase ml-1">Chave PIX (Máquina)</label>
-                      <input 
-                        type="text" 
-                        value={pixKeyInput} 
-                        onChange={(e) => setPixKeyInput(e.target.value)}
-                        placeholder="CPF/CNPJ/Email"
-                        className="w-full bg-zinc-900 border border-zinc-800 p-4 rounded-2xl outline-none focus:border-brand-red transition-all"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-zinc-600 uppercase ml-1">Nome Beneficiário</label>
-                      <input 
-                        type="text" 
-                        value={pixNameInput} 
-                        onChange={(e) => setPixNameInput(e.target.value)}
-                        placeholder="Nome na conta"
-                        className="w-full bg-zinc-900 border border-zinc-800 p-4 rounded-2xl outline-none focus:border-brand-red transition-all"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-zinc-600 uppercase ml-1">Cidade PIX</label>
-                      <input 
-                        type="text" 
-                        value={pixCityInput} 
-                        onChange={(e) => setPixCityInput(e.target.value)}
-                        placeholder="Sua cidade"
-                        className="w-full bg-zinc-900 border border-zinc-800 p-4 rounded-2xl outline-none focus:border-brand-red transition-all"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-zinc-600 uppercase ml-1">Chave API YouTube</label>
-                      <input 
-                        type="password" 
-                        value={youtubeApiKeyInput} 
-                        onChange={(e) => setYoutubeApiKeyInput(e.target.value)}
-                        placeholder="AIza..."
-                        className="w-full bg-zinc-900 border border-zinc-800 p-4 rounded-2xl outline-none focus:border-brand-red transition-all"
-                      />
-                    </div>
-                  </div>
-
                   <button 
-                    onClick={saveSettings}
+                    onClick={async () => {
+                      setServerUrl(serverUrlInput);
+                      setToken(tokenInput);
+                      setMpToken(mpTokenInput);
+                      await saveConfig({ serverUrl: serverUrlInput, token: tokenInput, mpToken: mpTokenInput });
+                      alert("Configurações salvas localmente!");
+                      setTimeout(() => syncWithServer(), 100);
+                    }}
                     className="w-full bg-emerald-600/20 text-emerald-500 py-4 rounded-2xl font-bold text-xs uppercase tracking-widest border border-emerald-500/30 hover:bg-emerald-600 hover:text-white transition-all shadow-lg"
                   >
                     SALVAR E CONECTAR
