@@ -37,23 +37,3 @@
     opacity: 0.8;
   }
 }
-
-
-/* Corrige rolagem com dedo no app web/Android.
-   Sem isso, alguns navegadores/WebView interpretam o toque nos cards como clique
-   e não deixam a lista de gêneros/DVDs/músicas subir e descer. */
-.scroll-touch {
-  overflow-y: scroll;
-  -webkit-overflow-scrolling: touch;
-  overscroll-behavior-y: contain;
-  touch-action: pan-y;
-  min-height: 0;
-}
-
-.scroll-touch > * {
-  touch-action: pan-y;
-}
-
-html, body, #root {
-  height: 100%;
-}
