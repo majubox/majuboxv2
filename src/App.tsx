@@ -160,6 +160,39 @@ const normalizeServerBase = (url: string) => {
   return base;
 };
 
+const getProxyRequestPath = (rawPath: string, serverUrl: string) => {
+  // No navegador o app usa o servidor Node do próprio web como ponte/proxy.
+  // Isso evita erro de CORS/Network Error ao chamar juke-2.onrender.com direto.
+  if (!rawPath) return '/';
+  const cleanBase = normalizeServerBase(serverUrl);
+  try {
+    if (rawPath.startsWith('http://') || rawPath.startsWith('https://')) {
+      const u = new URL(rawPath);
+      const base = new URL(cleanBase);
+      if (u.origin === base.origin) {
+        return `${u.pathname}${u.search || ''}`;
+      }
+      // URL externa que não é o servidor configurado: mantém como está.
+      return rawPath;
+    }
+  } catch {}
+  return rawPath.startsWith('/') ? rawPath : '/' + rawPath;
+};
+
+const shouldUseLocalProxyPath = (rawPath: string, serverUrl: string) => {
+  if (!rawPath) return false;
+  if (rawPath.startsWith('data:')) return false;
+  if (rawPath.startsWith('/machine/') || rawPath.startsWith('/proxy/') || rawPath.startsWith('/api/')) return true;
+  try {
+    const cleanBase = normalizeServerBase(serverUrl);
+    const u = new URL(rawPath);
+    const base = new URL(cleanBase);
+    return u.origin === base.origin;
+  } catch {
+    return false;
+  }
+};
+
 // --- Hooks ---
 function useDraggableScroll(ref: React.RefObject<HTMLDivElement | null>) {
   useEffect(() => {
@@ -350,9 +383,17 @@ export default function App() {
         const response = await CapacitorHttp.post(options);
         return response;
       } else {
+        if (shouldUseLocalProxyPath(path, serverUrl)) {
+          const proxyPath = getProxyRequestPath(path, serverUrl);
+          logDebug(`Axios POST via proxy local: ${proxyPath}`);
+          return await axios.post(proxyPath, { ...data, serverUrl: normalizeServerBase(serverUrl) }, { 
+            timeout: 45000,
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }
+          });
+        }
         const cleanBase = normalizeServerBase(serverUrl);
         const finalUrl = path.startsWith('http') ? path : `${cleanBase}${path.startsWith('/') ? path : '/' + path}`;
-        logDebug(`Axios POST direto: ${finalUrl}`);
+        logDebug(`Axios POST direto externo: ${finalUrl}`);
         return await axios.post(finalUrl, data, { 
           timeout: 45000,
           headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }
@@ -373,12 +414,21 @@ export default function App() {
         const response = await CapacitorHttp.get(options);
         return response;
       } else {
+        if (shouldUseLocalProxyPath(path, serverUrl)) {
+          const proxyPath = getProxyRequestPath(path, serverUrl);
+          logDebug(`Axios GET via proxy local: ${proxyPath}`);
+          return await axios.get(proxyPath, { 
+            params: { serverUrl: normalizeServerBase(serverUrl) },
+            timeout: 45000,
+            headers: { 'Accept': 'application/json' }
+          });
+        }
         const cleanBase = normalizeServerBase(serverUrl);
         const finalUrl = path.startsWith('http') ? path : `${cleanBase}${path.startsWith('/') ? path : '/' + path}`;
-        logDebug(`Axios GET direto: ${finalUrl}`);
+        logDebug(`Axios GET direto externo: ${finalUrl}`);
         return await axios.get(finalUrl, { 
           timeout: 45000,
-          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }
+          headers: { 'Accept': 'application/json' }
         });
       }
     },
@@ -389,6 +439,10 @@ export default function App() {
         const options = { url: finalUrl };
         return await CapacitorHttp.delete(options);
       } else {
+        if (shouldUseLocalProxyPath(path, serverUrl)) {
+          const proxyPath = getProxyRequestPath(path, serverUrl);
+          return await axios.delete(proxyPath, { params: { serverUrl: normalizeServerBase(serverUrl) }, timeout: 15000 });
+        }
         const cleanBase = normalizeServerBase(serverUrl);
         const finalUrl = path.startsWith('http') ? path : `${cleanBase}${path.startsWith('/') ? path : '/' + path}`;
         return await axios.delete(finalUrl, { timeout: 15000 });
@@ -401,6 +455,10 @@ export default function App() {
         const options = { url: finalUrl, data, headers: { 'Content-Type': 'application/json' }};
         return await CapacitorHttp.put(options);
       } else {
+        if (shouldUseLocalProxyPath(path, serverUrl)) {
+          const proxyPath = getProxyRequestPath(path, serverUrl);
+          return await axios.put(proxyPath, { ...data, serverUrl: normalizeServerBase(serverUrl) }, { timeout: 15000 });
+        }
         const cleanBase = normalizeServerBase(serverUrl);
         const finalUrl = path.startsWith('http') ? path : `${cleanBase}${path.startsWith('/') ? path : '/' + path}`;
         return await axios.put(finalUrl, data, { timeout: 15000 });

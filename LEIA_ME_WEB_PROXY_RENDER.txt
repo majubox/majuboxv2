@@ -1,0 +1,25 @@
+MAJUBOX WEB CORRIGIDO - SEM NETWORK ERROR
+
+Este pacote corrige o app web para NÃO chamar o servidor Python direto pelo navegador.
+Agora o navegador chama o próprio serviço web e o server.ts faz proxy para:
+https://juke-2.onrender.com
+
+Isso evita erro de CORS / Network Error.
+
+IMPORTANTE NO RENDER:
+Este web deve ser publicado como WEB SERVICE, não como Static Site.
+
+Configuração Render:
+Build Command:
+npm install --include=dev && npm run build
+
+Start Command:
+npm start
+
+Root Directory:
+se os arquivos estiverem dentro de app ou web, coloque essa pasta; se estiverem na raiz, deixe vazio.
+
+Na configuração do app, use:
+https://juke-2.onrender.com
+
+Sem /admin, sem /api e sem barra no final.
