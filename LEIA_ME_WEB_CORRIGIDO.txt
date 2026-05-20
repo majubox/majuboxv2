@@ -1,0 +1,16 @@
+MajuBox Web corrigido
+
+Correção principal:
+- O app web agora chama o servidor direto em https://juke-2.onrender.com/machine/check e /machine/genres.
+- Não depende mais de proxy local /machine/genres no próprio site.
+- Package ajustado para Static Site: npm install --include=dev && npx vite build.
+
+Render do APP WEB:
+Tipo: Static Site
+Build Command: npm install --include=dev && npx vite build
+Publish Directory: dist
+
+No app, URL do servidor:
+https://juke-2.onrender.com
+
+O servidor Python precisa estar com CORS liberado e rotas /machine/check e /machine/genres retornando JSON.
