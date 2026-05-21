@@ -62,3 +62,36 @@
 .touch-scroll:active {
   cursor: grabbing;
 }
+
+
+/* Efeito de moeda ao escolher um gênero */
+.genre-card {
+  transform-style: preserve-3d;
+  backface-visibility: hidden;
+  will-change: transform;
+}
+
+.coin-flip {
+  animation: coinFlipGenre 0.62s ease-in-out forwards;
+  pointer-events: none;
+  z-index: 50 !important;
+}
+
+@keyframes coinFlipGenre {
+  0% {
+    transform: perspective(900px) rotateY(0deg) scale(1);
+    filter: brightness(1);
+  }
+  45% {
+    transform: perspective(900px) rotateY(-88deg) scale(1.04);
+    filter: brightness(1.25);
+  }
+  55% {
+    transform: perspective(900px) rotateY(-100deg) scale(1.04);
+    filter: brightness(1.18);
+  }
+  100% {
+    transform: perspective(900px) rotateY(-180deg) scale(1);
+    filter: brightness(1);
+  }
+}

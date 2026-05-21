@@ -335,6 +335,7 @@ export default function App() {
   const [genres, setGenres] = useState<Genre[]>([]);
   const [cursorIndex, setCursorIndex] = useState(0);
   const [selectedGenre, setSelectedGenre] = useState<Genre | null>(null);
+  const [flippingGenreId, setFlippingGenreId] = useState<number | null>(null);
   const [selectedDVD, setSelectedDVD] = useState<Playlist | null>(null);
   const [currentPlaying, setCurrentPlaying] = useState<Song | null>(null);
   const currentPlayingRef = useRef(currentPlaying);
@@ -1382,6 +1383,20 @@ export default function App() {
     setScreen('genres');
   };
 
+
+  const handleGenreSelect = useCallback((genre: Genre) => {
+    if (flippingGenreId !== null) return;
+
+    setFlippingGenreId(genre.id);
+    setSelectedGenre(genre);
+
+    window.setTimeout(() => {
+      setScreen('dvds');
+      setCursorIndex(0);
+      setFlippingGenreId(null);
+    }, 620);
+  }, [flippingGenreId]);
+
   if (!isConfigLoaded) {
     return (
       <div className="h-screen w-full bg-brand-dark flex flex-col items-center justify-center">
@@ -1595,8 +1610,8 @@ export default function App() {
               {genres.map((genre, i) => (
                 <div 
                   key={genre.id}
-                  onClick={() => { setSelectedGenre(genre); setScreen('dvds'); }}
-                  className={`selectable-item aspect-square bg-brand-surface rounded-[2.5rem] flex flex-col items-center justify-center text-center border transition-all overflow-hidden relative active:scale-95 ${cursorIndex === i ? 'cursor-active border-brand-red ring-8 ring-brand-red/20 shadow-2xl shadow-brand-red/40 z-10' : 'border-zinc-900 shadow-lg'}`}
+                  onClick={() => handleGenreSelect(genre)}
+                  className={`selectable-item genre-card aspect-square bg-brand-surface rounded-[2.5rem] flex flex-col items-center justify-center text-center border transition-all overflow-hidden relative active:scale-95 ${cursorIndex === i ? 'cursor-active border-brand-red ring-8 ring-brand-red/20 shadow-2xl shadow-brand-red/40 z-10' : 'border-zinc-900 shadow-lg'} ${flippingGenreId === genre.id ? 'coin-flip' : ''}`}
                 >
                   {/* Background Cover Image */}
                   <div className="absolute inset-0 z-0">
