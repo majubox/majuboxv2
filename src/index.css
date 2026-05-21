@@ -9,17 +9,17 @@
 }
 
 @layer base {
-  html, body, #root {
-    width: 100%;
+  html,
+  body,
+  #root {
     height: 100%;
-    margin: 0;
-    padding: 0;
+    width: 100%;
+    overflow: hidden;
   }
 
   body {
     @apply bg-brand-dark text-white overflow-hidden select-none;
     -webkit-tap-highlight-color: transparent;
-    touch-action: manipulation;
     overscroll-behavior: none;
   }
 }
@@ -48,20 +48,17 @@
 }
 
 
-/* Correção para Android/WebView: permite arrastar com o dedo nas listas */
+/* Rolagem real com mouse e touch dentro das listas do MajuBox */
 .touch-scroll {
+  min-height: 0;
   overflow-y: auto !important;
-  overflow-x: hidden !important;
+  overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
   overscroll-behavior: contain;
-  touch-action: pan-y !important;
+  cursor: grab;
 }
 
-/* Área geral aceita gestos horizontais/verticais sem bloquear clique */
-.touch-area {
-  touch-action: pan-x pan-y;
-}
-
-button, .selectable-item {
-  touch-action: manipulation;
+.touch-scroll:active {
+  cursor: grabbing;
 }
