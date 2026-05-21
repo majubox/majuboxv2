@@ -1589,13 +1589,14 @@ export default function App() {
             <Header title="Gêneros Musicais" credits={credits} onBack={() => setScreen('welcome')} onRefresh={syncWithServer} loading={isLoading} />
             <div 
               ref={genresListRef}
-              className="touch-scroll flex-1 overflow-y-auto p-4 grid grid-cols-2 lg:grid-cols-3 gap-6 no-scrollbar"
+              className="touch-scroll flex-1 min-h-0 overflow-y-auto no-scrollbar"
             >
+              <div className="p-4 grid grid-cols-2 lg:grid-cols-3 gap-6 items-start">
               {genres.map((genre, i) => (
                 <div 
                   key={genre.id}
                   onClick={() => { setSelectedGenre(genre); setScreen('dvds'); }}
-                  className={`selectable-item aspect-square bg-brand-surface rounded-[2.5rem] flex flex-col items-center justify-center text-center border transition-all overflow-hidden relative active:scale-95 ${cursorIndex === i ? 'cursor-active border-brand-red ring-8 ring-brand-red/20 shadow-2xl shadow-brand-red/40 scale-105 z-10' : 'border-zinc-900 shadow-lg'}`}
+                  className={`selectable-item aspect-square bg-brand-surface rounded-[2.5rem] flex flex-col items-center justify-center text-center border transition-all overflow-hidden relative active:scale-95 ${cursorIndex === i ? 'cursor-active border-brand-red ring-8 ring-brand-red/20 shadow-2xl shadow-brand-red/40 z-10' : 'border-zinc-900 shadow-lg'}`}
                 >
                   {/* Background Cover Image */}
                   <div className="absolute inset-0 z-0">
@@ -1627,6 +1628,7 @@ export default function App() {
                   </div>
                 </div>
               ))}
+              </div>
             </div>
             <Footer active="genres" setScreen={setScreen} queueCount={queue.length} onTerms={() => setShowTermsModal(true)} />
           </motion.div>
@@ -1643,8 +1645,9 @@ export default function App() {
             <Header title={selectedGenre?.name || "DVD's"} credits={credits} onBack={() => setScreen('genres')} />
             <div 
               ref={dvdsListRef}
-              className="touch-scroll flex-1 overflow-y-auto p-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 no-scrollbar"
+              className="touch-scroll flex-1 min-h-0 overflow-y-auto no-scrollbar"
             >
+              <div className="p-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 items-start">
               {(() => {
                 const playlists = selectedGenre?.playlists || [];
                 const dvdsMap: Record<string, any> = {};
@@ -1714,7 +1717,7 @@ export default function App() {
                   <div 
                     key={dvd.id}
                     onClick={() => { setSelectedDVD(dvd); setScreen('songs'); }}
-                    className={`selectable-item aspect-[4/3] bg-brand-surface rounded-3xl overflow-hidden border transition-all relative flex flex-col active:scale-95 ${cursorIndex === i ? 'cursor-active border-brand-red ring-4 ring-brand-red/20 scale-105 z-10' : 'border-zinc-900'}`}
+                    className={`selectable-item aspect-[4/3] bg-brand-surface rounded-3xl overflow-hidden border transition-all relative flex flex-col active:scale-95 ${cursorIndex === i ? 'cursor-active border-brand-red ring-4 ring-brand-red/20 z-10' : 'border-zinc-900'}`}
                   >
                     <div className="flex-1 bg-zinc-900 flex items-center justify-center relative shadow-inner">
                       {dvd.cover ? (
@@ -1737,6 +1740,7 @@ export default function App() {
                   </div>
                 ));
               })()}
+              </div>
             </div>
           </motion.div>
         )}
@@ -1752,7 +1756,7 @@ export default function App() {
             <Header title={selectedDVD?.name || "Músicas"} credits={credits} onBack={() => setScreen('dvds')} />
             <div 
               ref={songsListRef}
-              className="touch-scroll flex-1 overflow-y-auto px-4 divide-y divide-zinc-900 no-scrollbar"
+              className="touch-scroll flex-1 min-h-0 overflow-y-auto px-4 divide-y divide-zinc-900 no-scrollbar"
             >
               {selectedDVD && selectedDVD.songs && selectedDVD.songs.length > 0 ? (
                 selectedDVD.songs.map((song, i) => (
