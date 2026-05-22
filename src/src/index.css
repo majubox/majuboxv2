@@ -1,0 +1,97 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand-red: #e11d48;
+  --color-brand-dark: #0a0a0c;
+  --color-brand-surface: #18181b;
+  
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+  }
+
+  body {
+    @apply bg-brand-dark text-white overflow-hidden select-none;
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior: none;
+  }
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.pulsate {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.05);
+    opacity: 0.8;
+  }
+}
+
+
+/* Rolagem real com mouse e touch dentro das listas do MajuBox */
+.touch-scroll {
+  min-height: 0;
+  overflow-y: auto !important;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+  overscroll-behavior: contain;
+  cursor: grab;
+}
+
+.touch-scroll:active {
+  cursor: grabbing;
+}
+
+
+/* Efeito de moeda ao escolher um gênero */
+.genre-card {
+  transform-style: preserve-3d;
+  backface-visibility: hidden;
+  will-change: transform;
+}
+
+.coin-flip {
+  animation: coinFlipGenre 0.62s ease-in-out forwards;
+  pointer-events: none;
+  z-index: 50 !important;
+}
+
+@keyframes coinFlipGenre {
+  0% {
+    transform: perspective(900px) rotateY(0deg) scale(1);
+    filter: brightness(1);
+  }
+  45% {
+    transform: perspective(900px) rotateY(-88deg) scale(1.04);
+    filter: brightness(1.25);
+  }
+  55% {
+    transform: perspective(900px) rotateY(-100deg) scale(1.04);
+    filter: brightness(1.18);
+  }
+  100% {
+    transform: perspective(900px) rotateY(-180deg) scale(1);
+    filter: brightness(1);
+  }
+}
