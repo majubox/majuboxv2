@@ -331,7 +331,7 @@ export default function App() {
   });
 
   // State
-  const [screen, setScreen] = useState<'welcome' | 'genres' | 'dvds' | 'songs' | 'playing' | 'queue' | 'pix' | 'admin' | 'locked' | 'reading'>('welcome');
+  const [screen, setScreen] = useState<'welcome' | 'genres' | 'dvds' | 'songs' | 'playing' | 'queue' | 'pix' | 'admin' | 'locked' | 'reading' | 'karaoke_score'>('welcome');
   const [genres, setGenres] = useState<Genre[]>([]);
   const [cursorIndex, setCursorIndex] = useState(0);
   const [selectedGenre, setSelectedGenre] = useState<Genre | null>(null);
@@ -360,6 +360,32 @@ export default function App() {
   });
   const [showTermsModal, setShowTermsModal] = useState(false);
   const [termsChecked, setTermsChecked] = useState(false);
+
+  // --- Karaoke / Pontuação ---
+  const KARAOKE_KEYS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ".split("");
+  const [karaokeModeActive, setKaraokeModeActive] = useState(false);
+  const karaokeModeActiveRef = useRef(false);
+  const [karaokeScore, setKaraokeScore] = useState(0);
+  const [karaokeDisplayScore, setKaraokeDisplayScore] = useState(1);
+  const [karaokePhase, setKaraokePhase] = useState<'rolling' | 'name' | 'saved'>('rolling');
+  const [karaokeName, setKaraokeName] = useState("");
+  const [karaokeKeyboardIndex, setKaraokeKeyboardIndex] = useState(0);
+  const [karaokeRank, setKaraokeRank] = useState<Array<{name: string; score: number; song: string; date: string}>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("MajuBox_KaraokeRank") || "[]");
+    } catch {
+      return [];
+    }
+  });
+  const activeKaraokeSongRef = useRef<Song | null>(null);
+  const karaokeFinishLockRef = useRef(false);
+  const micStreamRef = useRef<MediaStream | null>(null);
+  const micAudioContextRef = useRef<AudioContext | null>(null);
+  const micAnalyserRef = useRef<AnalyserNode | null>(null);
+  const micRafRef = useRef<number | null>(null);
+  const micStatsRef = useRef({ frames: 0, voiceFrames: 0, max: 0, sum: 0, startedAt: 0 });
+
+
 
   const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || (window as any).Capacitor;
 
@@ -505,6 +531,234 @@ export default function App() {
     const cleanPath = path.startsWith('/') ? path : '/' + path;
     return `${cleanBase}${cleanPath}`;
   }, [serverUrl]);
+
+  const isKaraokeText = useCallback((value?: string | null) => {
+    const n = (value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    // Aceita Karaoke, Karaokê, Karaok, Karaok� e variações comuns
+    return n.includes("karaoke") || n.includes("karaok") || n.includes("kara");
+  }, []);
+
+  const isKaraokeGenre = useCallback((genre?: Genre | null) => {
+    return isKaraokeText(genre?.name);
+  }, [isKaraokeText]);
+
+  const isKaraokeContext = useCallback((song?: Song | null) => {
+    return (
+      isKaraokeGenre(selectedGenre) ||
+      isKaraokeText(selectedDVD?.name) ||
+      isKaraokeText(selectedDVD?.dvd_name) ||
+      isKaraokeText(song?.title) ||
+      isKaraokeText(song?.artist)
+    );
+  }, [isKaraokeGenre, isKaraokeText, selectedDVD, selectedGenre]);
+
+  const playSimpleTone = useCallback((type: 'drum' | 'applause' | 'boo') => {
+    try {
+      const AudioCtx = (window.AudioContext || (window as any).webkitAudioContext);
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const now = ctx.currentTime;
+
+      if (type === 'drum') {
+        for (let i = 0; i < 10; i++) {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(130 - i * 5, now + i * 0.08);
+          gain.gain.setValueAtTime(0.12, now + i * 0.08);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.08 + 0.06);
+          osc.connect(gain).connect(ctx.destination);
+          osc.start(now + i * 0.08);
+          osc.stop(now + i * 0.08 + 0.07);
+        }
+      }
+
+      if (type === 'applause') {
+        for (let i = 0; i < 24; i++) {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'triangle';
+          osc.frequency.setValueAtTime(600 + Math.random() * 700, now + i * 0.035);
+          gain.gain.setValueAtTime(0.035, now + i * 0.035);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.035 + 0.05);
+          osc.connect(gain).connect(ctx.destination);
+          osc.start(now + i * 0.035);
+          osc.stop(now + i * 0.035 + 0.06);
+        }
+      }
+
+      if (type === 'boo') {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(170, now);
+        osc.frequency.exponentialRampToValueAtTime(95, now + 0.9);
+        gain.gain.setValueAtTime(0.12, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 1.1);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(now);
+        osc.stop(now + 1.15);
+      }
+
+      setTimeout(() => ctx.close().catch(() => {}), 1600);
+    } catch {}
+  }, []);
+
+  const startMicScoring = useCallback(async () => {
+    micStatsRef.current = { frames: 0, voiceFrames: 0, max: 0, sum: 0, startedAt: Date.now() };
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      micStreamRef.current = stream;
+      const AudioCtx = (window.AudioContext || (window as any).webkitAudioContext);
+      const ctx = new AudioCtx();
+      micAudioContextRef.current = ctx;
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.75;
+      source.connect(analyser);
+      micAnalyserRef.current = analyser;
+      const data = new Uint8Array(analyser.fftSize);
+
+      const loop = () => {
+        analyser.getByteTimeDomainData(data);
+        let sumSquares = 0;
+        for (let i = 0; i < data.length; i++) {
+          const v = (data[i] - 128) / 128;
+          sumSquares += v * v;
+        }
+        const rms = Math.sqrt(sumSquares / data.length);
+        const stats = micStatsRef.current;
+        stats.frames += 1;
+        stats.sum += rms;
+        stats.max = Math.max(stats.max, rms);
+        if (rms > 0.018) stats.voiceFrames += 1;
+        micRafRef.current = requestAnimationFrame(loop);
+      };
+      loop();
+    } catch (e) {
+      logDebug("Microfone não liberado para karaokê. Pontuação ficará baixa: " + (e as any)?.message);
+    }
+  }, [logDebug]);
+
+  const stopMicScoringAndGetScore = useCallback(() => {
+    try {
+      if (micRafRef.current) cancelAnimationFrame(micRafRef.current);
+      micRafRef.current = null;
+      micStreamRef.current?.getTracks().forEach(t => t.stop());
+      micStreamRef.current = null;
+      micAudioContextRef.current?.close().catch(() => {});
+      micAudioContextRef.current = null;
+    } catch {}
+
+    const stats = micStatsRef.current;
+    const avg = stats.frames ? stats.sum / stats.frames : 0;
+    const presence = stats.frames ? stats.voiceFrames / stats.frames : 0;
+
+    // Sem voz detectada = nota 01.
+    if (stats.frames < 10 || stats.max < 0.018 || presence < 0.04) return 1;
+
+    // Com voz: pontuação mínima 20. Considera presença + volume médio + pico.
+    const presenceScore = Math.min(45, Math.round(presence * 55));
+    const avgScore = Math.min(25, Math.round(avg * 450));
+    const maxScore = Math.min(20, Math.round(stats.max * 240));
+    const randomBonus = Math.floor(Math.random() * 10);
+    return Math.max(20, Math.min(99, 20 + presenceScore + avgScore + maxScore + randomBonus));
+  }, []);
+
+  const finishKaraokeSong = useCallback(() => {
+    if (karaokeFinishLockRef.current) return;
+    karaokeFinishLockRef.current = true;
+    const score = stopMicScoringAndGetScore();
+    setKaraokeScore(score);
+    setKaraokeDisplayScore(1);
+    setKaraokeName("");
+    setKaraokeKeyboardIndex(0);
+    setKaraokePhase('rolling');
+    setCurrentPlaying(null);
+    setPreviewSong(null);
+    setScreen('karaoke_score');
+    playSimpleTone('drum');
+
+    let current = 1;
+    const roll = setInterval(() => {
+      current = current >= 99 ? 1 : current + Math.max(1, Math.floor(Math.random() * 9));
+      if (current > 99) current = ((current - 1) % 99) + 1;
+      setKaraokeDisplayScore(current);
+    }, 55);
+
+    setTimeout(() => {
+      clearInterval(roll);
+      setKaraokeDisplayScore(score);
+      playSimpleTone(score >= 50 ? 'applause' : 'boo');
+      setTimeout(() => setKaraokePhase('name'), 700);
+    }, 2200);
+  }, [playSimpleTone, stopMicScoringAndGetScore]);
+
+  const saveKaraokeRank = useCallback(async () => {
+    const name = (karaokeName.trim() || "CANTOR").substring(0, 12).toUpperCase();
+    const entry = {
+      name,
+      score: karaokeScore,
+      song: activeKaraokeSongRef.current?.title || currentPlayingRef.current?.title || "Karaokê",
+      date: new Date().toISOString()
+    };
+    const nextRank = [...karaokeRank, entry]
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 10);
+    setKaraokeRank(nextRank);
+    localStorage.setItem("MajuBox_KaraokeRank", JSON.stringify(nextRank));
+    setKaraokePhase('saved');
+    karaokeFinishLockRef.current = false;
+    try {
+      await api.post(getFullUrl('/machine/karaoke/score'), {
+        hwid,
+        token,
+        name,
+        score: karaokeScore,
+        song_title: entry.song
+      });
+    } catch {}
+  }, [api, getFullUrl, hwid, karaokeName, karaokeRank, karaokeScore, token]);
+
+  const handleKaraokeKey = useCallback((key: string) => {
+    if (key === 'OK') {
+      saveKaraokeRank();
+      return;
+    }
+    if (key === 'DEL') {
+      setKaraokeName(prev => prev.slice(0, -1));
+      return;
+    }
+    setKaraokeName(prev => (prev + key).slice(0, 12));
+  }, [saveKaraokeRank]);
+
+  useEffect(() => {
+    karaokeModeActiveRef.current = karaokeModeActive;
+  }, [karaokeModeActive]);
+
+  useEffect(() => {
+    if (screen !== 'playing' || !karaokeModeActive || !currentPlaying) return;
+
+    const timer = window.setInterval(() => {
+      try {
+        const player = ytPlayerRef.current;
+        if (!player || typeof player.getPlayerState !== 'function') return;
+
+        const state = player.getPlayerState();
+        const current = typeof player.getCurrentTime === 'function' ? player.getCurrentTime() : 0;
+        const duration = typeof player.getDuration === 'function' ? player.getDuration() : 0;
+
+        if (state === 0 || (duration > 15 && current > 5 && duration - current <= 1.5)) {
+          setKaraokeModeActive(false);
+          karaokeModeActiveRef.current = false;
+          finishKaraokeSong();
+        }
+      } catch {}
+    }, 700);
+
+    return () => window.clearInterval(timer);
+  }, [screen, karaokeModeActive, currentPlaying, finishKaraokeSong]);
 
   // --- Initial Loading ---
   useEffect(() => {
@@ -859,6 +1113,43 @@ export default function App() {
       }
 
       resetIdle();
+
+      if (screen === 'karaoke_score' && karaokePhase === 'name') {
+        const cols = 7;
+        const total = KARAOKE_KEYS.length + 2;
+        if (e.key === 'ArrowRight') {
+          setKaraokeKeyboardIndex(prev => (prev + 1) % total);
+          e.preventDefault();
+          return;
+        }
+        if (e.key === 'ArrowLeft') {
+          setKaraokeKeyboardIndex(prev => (prev - 1 + total) % total);
+          e.preventDefault();
+          return;
+        }
+        if (e.key === 'ArrowDown') {
+          setKaraokeKeyboardIndex(prev => Math.min(total - 1, prev + cols));
+          e.preventDefault();
+          return;
+        }
+        if (e.key === 'ArrowUp') {
+          setKaraokeKeyboardIndex(prev => Math.max(0, prev - cols));
+          e.preventDefault();
+          return;
+        }
+        if (e.key === 'Enter') {
+          const key = karaokeKeyboardIndex < KARAOKE_KEYS.length ? KARAOKE_KEYS[karaokeKeyboardIndex] : (karaokeKeyboardIndex === KARAOKE_KEYS.length ? 'DEL' : 'OK');
+          handleKaraokeKey(key);
+          e.preventDefault();
+          return;
+        }
+        if (e.key === 'Backspace') {
+          setKaraokeName(prev => prev.slice(0, -1));
+          e.preventDefault();
+          return;
+        }
+      }
+
       // Teclas de atalho globais
       if (e.key === '4') {
         setScreen('admin');
@@ -954,6 +1245,7 @@ export default function App() {
           setScreen('songs');
           e.preventDefault();
         } else if (e.key === 'Escape' || e.key === 'Backspace') {
+          setKaraokeModeActive(false);
           setCurrentPlaying(null);
           setScreen('genres');
         }
@@ -966,7 +1258,7 @@ export default function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [screen, genres, selectedGenre, selectedDVD, cursorIndex, previewSong, credits]);
+  }, [screen, genres, selectedGenre, selectedDVD, cursorIndex, previewSong, credits, karaokePhase, karaokeKeyboardIndex, karaokeName, handleKaraokeKey]);
 
   // Scroll automático
   useEffect(() => {
@@ -1152,7 +1444,12 @@ export default function App() {
                 }
               }
 
-              if (state === (window as any).YT.PlayerState.ENDED) {
+              if (state === 0 || state === (window as any).YT?.PlayerState?.ENDED) {
+                if (karaokeModeActiveRef.current) {
+                  setKaraokeModeActive(false);
+                  finishKaraokeSong();
+                  return;
+                }
                 const currentQueue = queueRef.current;
                 if (currentQueue.length > 0) {
                   const next = currentQueue[0];
@@ -1234,7 +1531,7 @@ export default function App() {
 
   // Logica de Retorno ao Vídeo (5 segundos sem interação se música tocando)
   useEffect(() => {
-    if (['playing', 'welcome', 'locked', 'pix', 'admin', 'reading', 'queue'].includes(screen) || !currentPlaying || isAttractMode) return;
+    if (['playing', 'welcome', 'locked', 'pix', 'admin', 'reading', 'queue', 'karaoke_score'].includes(screen) || !currentPlaying || isAttractMode) return;
 
     const returnTimer = setTimeout(() => {
       setScreen('playing');
@@ -1255,6 +1552,7 @@ export default function App() {
         } else {
           // Fim da demonstração
           setIsAttractMode(false);
+          setKaraokeModeActive(false);
           setCurrentPlaying(null);
           setScreen('genres');
         }
@@ -1298,6 +1596,14 @@ export default function App() {
     setPreviewSong(null);
     
     if (!currentPlaying) {
+      const shouldScoreKaraoke = isKaraokeContext(song);
+      setKaraokeModeActive(shouldScoreKaraoke);
+      karaokeModeActiveRef.current = shouldScoreKaraoke;
+      karaokeFinishLockRef.current = false;
+      activeKaraokeSongRef.current = shouldScoreKaraoke ? song : null;
+      if (shouldScoreKaraoke) {
+        startMicScoring();
+      }
       setCurrentPlaying(song);
       setScreen('playing');
       if (song.youtube_id) {
@@ -1820,6 +2126,7 @@ export default function App() {
                   setTapCount(prev => {
                     const next = prev + 1;
                     if (next >= 5) {
+                      setKaraokeModeActive(false);
                       setCurrentPlaying(null);
                       setScreen('genres');
                       return 0;
@@ -1841,6 +2148,11 @@ export default function App() {
                      MODO DEMONSTRAÇÃO
                    </div>
                  )}
+                 {karaokeModeActive && (
+                   <div className="absolute top-4 right-4 z-20 bg-black/70 border border-brand-red/50 px-4 py-2 rounded-2xl text-[10px] font-black tracking-widest text-brand-red shadow-lg">
+                     🎤 KARAOKÊ ATIVO
+                   </div>
+                 )}
                {currentPlaying?.video_url ? (
                  <video 
                    className="w-full h-full object-contain"
@@ -1848,6 +2160,11 @@ export default function App() {
                    autoPlay
                    controls={false}
                    onEnded={() => {
+                     if (karaokeModeActiveRef.current) {
+                       setKaraokeModeActive(false);
+                       finishKaraokeSong();
+                       return;
+                     }
                      if (queue.length > 0) {
                        const next = queue[0];
                        setQueue(prev => prev.slice(1));
@@ -1882,7 +2199,7 @@ export default function App() {
             {!currentPlaying?.youtube_id && (
               <div className="p-8 bg-brand-dark flex items-center justify-around border-t border-zinc-900 relative z-50">
                   <button 
-                    onClick={() => { setCurrentPlaying(null); setScreen('genres'); }}
+                    onClick={() => { karaokeFinishLockRef.current = false; activeKaraokeSongRef.current = null; setKaraokeModeActive(false); setCurrentPlaying(null); setScreen('genres'); }}
                     className="flex flex-col items-center gap-2"
                   >
                     <div className="w-16 h-16 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center text-white active:bg-brand-red active:border-brand-red transition-all">
@@ -1902,6 +2219,91 @@ export default function App() {
                   </button>
               </div>
             )}
+          </motion.div>
+        )}
+
+
+        {/* --- KARAOKE SCORE SCREEN --- */}
+        {screen === 'karaoke_score' && (
+          <motion.div
+            key="karaoke_score"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="flex-1 min-h-0 bg-black flex flex-col items-center justify-center p-6 text-center overflow-hidden"
+          >
+            <div className="w-full max-w-4xl rounded-[2.5rem] overflow-hidden border border-zinc-800 bg-zinc-950 shadow-2xl">
+              <div className="relative min-h-[260px] bg-gradient-to-r from-black via-amber-950/60 to-black flex items-center justify-center p-8">
+                <div className="absolute inset-0 opacity-30 bg-[radial-gradient(circle_at_center,#f59e0b_0%,transparent_55%)]" />
+                <div className="relative z-10 flex flex-col md:flex-row items-center justify-center gap-8 w-full">
+                  <div className="w-28 h-28 md:w-36 md:h-36 rounded-full bg-zinc-900 border-4 border-amber-500 flex items-center justify-center shadow-2xl shadow-amber-500/30">
+                    <Music className="w-16 h-16 md:w-20 md:h-20 text-amber-300" />
+                  </div>
+                  <div>
+                    <h1 className="text-3xl md:text-5xl font-black uppercase tracking-wider text-white drop-shadow-[0_3px_0_rgba(0,0,0,0.9)]">
+                      Pontuação
+                    </h1>
+                    <div className="mt-4 bg-white text-black rounded-3xl border-4 border-zinc-900 px-10 py-5 min-w-[220px] shadow-xl">
+                      <div className="text-7xl md:text-8xl font-black tabular-nums leading-none">
+                        {String(karaokeDisplayScore).padStart(2, '0')}
+                      </div>
+                      <div className="text-[10px] font-black uppercase tracking-widest mt-2">
+                        {karaokePhase === 'rolling' ? 'Calculando...' : karaokeScore >= 70 ? 'Mandou muito!' : karaokeScore >= 40 ? 'Na média!' : 'Tente novamente!'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {karaokePhase === 'name' && (
+                <div className="p-5 md:p-7 bg-zinc-950 border-t border-zinc-800">
+                  <h2 className="text-brand-red font-black uppercase tracking-[0.2em] text-xs mb-3">Digite seu nome para o Rank</h2>
+                  <div className="mx-auto max-w-md bg-black border border-zinc-800 rounded-2xl p-4 text-3xl font-black tracking-widest min-h-[70px] flex items-center justify-center">
+                    {karaokeName || <span className="text-zinc-700 text-lg">SEU NOME</span>}
+                  </div>
+                  <div className="mx-auto max-w-2xl grid grid-cols-7 gap-2 mt-5">
+                    {[...KARAOKE_KEYS, 'DEL', 'OK'].map((key, idx) => (
+                      <button
+                        key={key + idx}
+                        onClick={() => handleKaraokeKey(key)}
+                        className={`h-12 rounded-xl font-black text-sm border transition-all ${karaokeKeyboardIndex === idx ? 'bg-brand-red text-white border-brand-red scale-105 shadow-lg shadow-brand-red/30' : 'bg-zinc-900 text-zinc-300 border-zinc-800 active:bg-zinc-800'}`}
+                      >
+                        {key === ' ' ? 'ESP' : key}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-zinc-600 mt-3 uppercase tracking-widest">Setas movem • Enter confirma • OK salva</p>
+                </div>
+              )}
+
+              {(karaokePhase === 'saved' || karaokeRank.length > 0) && (
+                <div className="p-5 md:p-7 bg-zinc-950 border-t border-zinc-800">
+                  <h2 className="text-white font-black uppercase tracking-[0.2em] text-xs mb-4">Top 10 Karaokê</h2>
+                  <div className="grid gap-2 max-w-2xl mx-auto">
+                    {karaokeRank.slice(0, 10).map((r, i) => (
+                      <div key={`${r.name}-${r.date}-${i}`} className="flex items-center justify-between bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <span className={`w-8 h-8 rounded-lg flex items-center justify-center font-black ${i === 0 ? 'bg-amber-500 text-black' : 'bg-zinc-800 text-zinc-400'}`}>{i + 1}</span>
+                          <span className="font-black uppercase">{r.name}</span>
+                        </div>
+                        <span className="text-brand-red text-2xl font-black tabular-nums">{String(r.score).padStart(2, '0')}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    onClick={() => {
+                      karaokeFinishLockRef.current = false;
+                      activeKaraokeSongRef.current = null;
+                      setKaraokeModeActive(false);
+                      setCurrentPlaying(null);
+                      setScreen('genres');
+                    }}
+                    className="mt-6 bg-brand-red px-10 py-4 rounded-2xl font-black uppercase tracking-widest text-xs shadow-xl shadow-brand-red/20"
+                  >
+                    Voltar ao catálogo
+                  </button>
+                </div>
+              )}
+            </div>
           </motion.div>
         )}
 
@@ -2420,6 +2822,7 @@ export default function App() {
                  setTapCount(prev => {
                     const next = prev + 1;
                     if (next >= 5) {
+                      setKaraokeModeActive(false);
                       setCurrentPlaying(null);
                       setScreen('genres');
                       return 0;
