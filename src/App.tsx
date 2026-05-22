@@ -367,7 +367,7 @@ export default function App() {
   const karaokeModeActiveRef = useRef(false);
   const [karaokeScore, setKaraokeScore] = useState(0);
   const [karaokeDisplayScore, setKaraokeDisplayScore] = useState(1);
-  const [karaokePhase, setKaraokePhase] = useState<'rolling' | 'name' | 'saved'>('rolling');
+  const [karaokePhase, setKaraokePhase] = useState<'rolling' | 'result' | 'name' | 'saved'>('rolling');
   const [karaokeName, setKaraokeName] = useState("");
   const [karaokeKeyboardIndex, setKaraokeKeyboardIndex] = useState(0);
   const [karaokeRank, setKaraokeRank] = useState<Array<{name: string; score: number; song: string; date: string}>>(() => {
@@ -384,6 +384,7 @@ export default function App() {
   const micAnalyserRef = useRef<AnalyserNode | null>(null);
   const micRafRef = useRef<number | null>(null);
   const micStatsRef = useRef({ frames: 0, voiceFrames: 0, max: 0, sum: 0, startedAt: 0 });
+  const scoringAudioRef = useRef<HTMLAudioElement | null>(null);
 
 
 
@@ -393,6 +394,36 @@ export default function App() {
     console.log(`[DEBUG] ${msg}`);
     setDebugLogs(prev => [new Date().toLocaleTimeString() + ': ' + msg, ...prev].slice(0, 50));
   }, []);
+
+  const playAudioAsset = useCallback((src: string, options?: { loop?: boolean; volume?: number }) => {
+    try {
+      const audio = new Audio(src);
+      audio.loop = !!options?.loop;
+      audio.volume = options?.volume ?? 1;
+      const playPromise = audio.play();
+      if (playPromise && typeof playPromise.catch === 'function') {
+        playPromise.catch((err) => logDebug('Som bloqueado pelo navegador: ' + (err?.message || err)));
+      }
+      return audio;
+    } catch (err: any) {
+      logDebug('Erro ao tocar som: ' + (err?.message || err));
+      return null;
+    }
+  }, [logDebug]);
+
+  const stopScoringSound = useCallback(() => {
+    try {
+      if (scoringAudioRef.current) {
+        scoringAudioRef.current.pause();
+        scoringAudioRef.current.currentTime = 0;
+        scoringAudioRef.current = null;
+      }
+    } catch {}
+  }, []);
+
+  const playCreditSound = useCallback(() => {
+    playAudioAsset('/sounds/creditos.mp3', { volume: 1 });
+  }, [playAudioAsset]);
 
   const recordTermsAcceptance = useCallback(async () => {
     const acceptedAt = new Date().toISOString();
@@ -678,7 +709,10 @@ export default function App() {
     setCurrentPlaying(null);
     setPreviewSong(null);
     setScreen('karaoke_score');
-    playSimpleTone('drum');
+
+    // Som de suspense/pontuação enquanto os números ficam rodando.
+    stopScoringSound();
+    scoringAudioRef.current = playAudioAsset('/sounds/pontuacao-karaoke.mp3', { loop: true, volume: 0.9 });
 
     let current = 1;
     const roll = setInterval(() => {
@@ -687,13 +721,19 @@ export default function App() {
       setKaraokeDisplayScore(current);
     }, 55);
 
+    // Segura a atenção do cliente: números rodam por 10 segundos.
     setTimeout(() => {
       clearInterval(roll);
+      stopScoringSound();
       setKaraokeDisplayScore(score);
-      playSimpleTone(score >= 50 ? 'applause' : 'boo');
-      setTimeout(() => setKaraokePhase('name'), 700);
-    }, 2200);
-  }, [playSimpleTone, stopMicScoringAndGetScore]);
+      setKaraokePhase('result');
+      if (score >= 20) {
+        playAudioAsset('/sounds/paumas.mp3', { volume: 1 });
+      } else {
+        playSimpleTone('boo');
+      }
+    }, 10000);
+  }, [playAudioAsset, playSimpleTone, stopMicScoringAndGetScore, stopScoringSound]);
 
   const saveKaraokeRank = useCallback(async () => {
     const name = (karaokeName.trim() || "CANTOR").substring(0, 12).toUpperCase();
@@ -799,13 +839,14 @@ export default function App() {
       // Tecla "6" para inserir crédito manual
       if (e.key === '6') {
         setCredits(prev => prev + 1);
+        playCreditSound();
         logDebug("Crédito manual inserido via tecla 6");
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [logDebug]);
+  }, [logDebug, playCreditSound]);
 
   // Idle / Attract Mode logic
   const [lastInteraction, setLastInteraction] = useState(Date.now());
@@ -1070,6 +1111,7 @@ export default function App() {
           data.paid === true
         ) {
           setCredits(prev => prev + (data.credits_added || pixData.credits || 2));
+          playCreditSound();
           setTotalRevenue(prev => prev + (data.amount || pixData.amount || 1.00));
           setPixData(null);
           setScreen('genres');
@@ -1084,7 +1126,7 @@ export default function App() {
       interval = setInterval(checkPayment, 5000);
     }
     return () => clearInterval(interval);
-  }, [screen, pixData, serverUrl, token]);
+  }, [screen, pixData, serverUrl, token, playCreditSound]);
 
   // Logica de Preview de 6 segundos
   useEffect(() => {
@@ -1113,6 +1155,14 @@ export default function App() {
       }
 
       resetIdle();
+
+      if (screen === 'karaoke_score' && karaokePhase === 'result') {
+        if (e.key === 'Enter') {
+          setKaraokePhase('name');
+          e.preventDefault();
+        }
+        return;
+      }
 
       if (screen === 'karaoke_score' && karaokePhase === 'name') {
         const cols = 7;
@@ -1170,6 +1220,7 @@ export default function App() {
       if (e.key === 'p' || e.key === 'P') {
         const amount = 2;
         setCredits(prev => prev + amount);
+        playCreditSound();
         // Notificar server
         api.post('/api/machine/add_credits', { hwid, token, amount, type: 'manual' }).catch(() => {});
         return;
@@ -1258,7 +1309,7 @@ export default function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [screen, genres, selectedGenre, selectedDVD, cursorIndex, previewSong, credits, karaokePhase, karaokeKeyboardIndex, karaokeName, handleKaraokeKey]);
+  }, [screen, genres, selectedGenre, selectedDVD, cursorIndex, previewSong, credits, karaokePhase, karaokeKeyboardIndex, karaokeName, handleKaraokeKey, playCreditSound]);
 
   // Scroll automático
   useEffect(() => {
@@ -2254,6 +2305,19 @@ export default function App() {
                 </div>
               </div>
 
+              {karaokePhase === 'result' && (
+                <div className="p-5 md:p-7 bg-zinc-950 border-t border-zinc-800">
+                  <h2 className="text-white font-black uppercase tracking-[0.2em] text-xs mb-3">Resultado pronto</h2>
+                  <p className="text-zinc-400 text-sm mb-5">Aperte <b className="text-brand-red">ENTER</b> para digitar o nome e salvar no Rank.</p>
+                  <button
+                    onClick={() => setKaraokePhase('name')}
+                    className="bg-brand-red px-10 py-4 rounded-2xl font-black uppercase tracking-widest text-xs shadow-xl shadow-brand-red/20"
+                  >
+                    Continuar para o Rank
+                  </button>
+                </div>
+              )}
+
               {karaokePhase === 'name' && (
                 <div className="p-5 md:p-7 bg-zinc-950 border-t border-zinc-800">
                   <h2 className="text-brand-red font-black uppercase tracking-[0.2em] text-xs mb-3">Digite seu nome para o Rank</h2>
@@ -2275,7 +2339,7 @@ export default function App() {
                 </div>
               )}
 
-              {(karaokePhase === 'saved' || karaokeRank.length > 0) && (
+              {karaokePhase === 'saved' && (
                 <div className="p-5 md:p-7 bg-zinc-950 border-t border-zinc-800">
                   <h2 className="text-white font-black uppercase tracking-[0.2em] text-xs mb-4">Top 10 Karaokê</h2>
                   <div className="grid gap-2 max-w-2xl mx-auto">
@@ -2295,6 +2359,7 @@ export default function App() {
                       activeKaraokeSongRef.current = null;
                       setKaraokeModeActive(false);
                       setCurrentPlaying(null);
+                      stopScoringSound();
                       setScreen('genres');
                     }}
                     className="mt-6 bg-brand-red px-10 py-4 rounded-2xl font-black uppercase tracking-widest text-xs shadow-xl shadow-brand-red/20"
