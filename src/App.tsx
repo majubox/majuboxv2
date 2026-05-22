@@ -379,6 +379,10 @@ export default function App() {
   });
   const activeKaraokeSongRef = useRef<Song | null>(null);
   const karaokeFinishLockRef = useRef(false);
+  const karaokeReturnTimerRef = useRef<number | null>(null);
+  const karaokeResultTimerRef = useRef<number | null>(null);
+  const karaokeRollIntervalRef = useRef<number | null>(null);
+  const screenRef = useRef(screen);
   const micStreamRef = useRef<MediaStream | null>(null);
   const micAudioContextRef = useRef<AudioContext | null>(null);
   const micAnalyserRef = useRef<AnalyserNode | null>(null);
@@ -697,9 +701,55 @@ export default function App() {
     return Math.max(20, Math.min(99, 20 + presenceScore + avgScore + maxScore + randomBonus));
   }, []);
 
+  const cleanupKaraokeTimers = useCallback(() => {
+    if (karaokeRollIntervalRef.current) {
+      window.clearInterval(karaokeRollIntervalRef.current);
+      karaokeRollIntervalRef.current = null;
+    }
+    if (karaokeResultTimerRef.current) {
+      window.clearTimeout(karaokeResultTimerRef.current);
+      karaokeResultTimerRef.current = null;
+    }
+    if (karaokeReturnTimerRef.current) {
+      window.clearTimeout(karaokeReturnTimerRef.current);
+      karaokeReturnTimerRef.current = null;
+    }
+  }, []);
+
+  const returnFromKaraokeToGenres = useCallback(() => {
+    cleanupKaraokeTimers();
+    stopScoringSound();
+    karaokeFinishLockRef.current = false;
+    activeKaraokeSongRef.current = null;
+    setKaraokeModeActive(false);
+    karaokeModeActiveRef.current = false;
+    setCurrentPlaying(null);
+    setPreviewSong(null);
+    setScreen('genres');
+  }, [cleanupKaraokeTimers, stopScoringSound]);
+
+  const qualifiesForKaraokeRank = useCallback((score: number) => {
+    const rank = [...karaokeRank].sort((a, b) => b.score - a.score).slice(0, 10);
+    if (rank.length < 10) return score > 0;
+    return score > (rank[rank.length - 1]?.score || 0);
+  }, [karaokeRank]);
+
   const finishKaraokeSong = useCallback(() => {
     if (karaokeFinishLockRef.current) return;
     karaokeFinishLockRef.current = true;
+    cleanupKaraokeTimers();
+
+    try {
+      const player = ytPlayerRef.current;
+      if (player && typeof player.stopVideo === 'function') player.stopVideo();
+    } catch {}
+    try {
+      if (videoRef.current) {
+        videoRef.current.pause();
+        videoRef.current.currentTime = 0;
+      }
+    } catch {}
+
     const score = stopMicScoringAndGetScore();
     setKaraokeScore(score);
     setKaraokeDisplayScore(1);
@@ -715,15 +765,18 @@ export default function App() {
     scoringAudioRef.current = playAudioAsset('/sounds/pontuacao-karaoke.mp3', { loop: true, volume: 0.9 });
 
     let current = 1;
-    const roll = setInterval(() => {
+    karaokeRollIntervalRef.current = window.setInterval(() => {
       current = current >= 99 ? 1 : current + Math.max(1, Math.floor(Math.random() * 9));
       if (current > 99) current = ((current - 1) % 99) + 1;
       setKaraokeDisplayScore(current);
     }, 55);
 
     // Segura a atenção do cliente: números rodam por 10 segundos.
-    setTimeout(() => {
-      clearInterval(roll);
+    karaokeResultTimerRef.current = window.setTimeout(() => {
+      if (karaokeRollIntervalRef.current) {
+        window.clearInterval(karaokeRollIntervalRef.current);
+        karaokeRollIntervalRef.current = null;
+      }
       stopScoringSound();
       setKaraokeDisplayScore(score);
       setKaraokePhase('result');
@@ -732,8 +785,20 @@ export default function App() {
       } else {
         playSimpleTone('boo');
       }
+
+      // Mostra a pontuação final por 15 segundos antes do rank.
+      karaokeResultTimerRef.current = window.setTimeout(() => {
+        if (qualifiesForKaraokeRank(score)) {
+          setKaraokePhase('name');
+        } else {
+          setKaraokePhase('saved');
+          karaokeReturnTimerRef.current = window.setTimeout(() => {
+            returnFromKaraokeToGenres();
+          }, 15000);
+        }
+      }, 15000);
     }, 10000);
-  }, [playAudioAsset, playSimpleTone, stopMicScoringAndGetScore, stopScoringSound]);
+  }, [cleanupKaraokeTimers, playAudioAsset, playSimpleTone, qualifiesForKaraokeRank, returnFromKaraokeToGenres, stopMicScoringAndGetScore, stopScoringSound]);
 
   const saveKaraokeRank = useCallback(async () => {
     const name = (karaokeName.trim() || "CANTOR").substring(0, 12).toUpperCase();
@@ -749,7 +814,13 @@ export default function App() {
     setKaraokeRank(nextRank);
     localStorage.setItem("MajuBox_KaraokeRank", JSON.stringify(nextRank));
     setKaraokePhase('saved');
-    karaokeFinishLockRef.current = false;
+
+    // Depois que salvou o nome, mostra o Top 10 por 15 segundos e só então volta ao catálogo.
+    if (karaokeReturnTimerRef.current) window.clearTimeout(karaokeReturnTimerRef.current);
+    karaokeReturnTimerRef.current = window.setTimeout(() => {
+      returnFromKaraokeToGenres();
+    }, 15000);
+
     try {
       await api.post(getFullUrl('/machine/karaoke/score'), {
         hwid,
@@ -759,7 +830,7 @@ export default function App() {
         song_title: entry.song
       });
     } catch {}
-  }, [api, getFullUrl, hwid, karaokeName, karaokeRank, karaokeScore, token]);
+  }, [api, getFullUrl, hwid, karaokeName, karaokeRank, karaokeScore, returnFromKaraokeToGenres, token]);
 
   const handleKaraokeKey = useCallback((key: string) => {
     if (key === 'OK') {
@@ -772,6 +843,10 @@ export default function App() {
     }
     setKaraokeName(prev => (prev + key).slice(0, 12));
   }, [saveKaraokeRank]);
+
+  useEffect(() => {
+    screenRef.current = screen;
+  }, [screen]);
 
   useEffect(() => {
     karaokeModeActiveRef.current = karaokeModeActive;
@@ -790,8 +865,6 @@ export default function App() {
         const duration = typeof player.getDuration === 'function' ? player.getDuration() : 0;
 
         if (state === 0 || (duration > 15 && current > 5 && duration - current <= 1.5)) {
-          setKaraokeModeActive(false);
-          karaokeModeActiveRef.current = false;
           finishKaraokeSong();
         }
       } catch {}
@@ -1156,11 +1229,10 @@ export default function App() {
 
       resetIdle();
 
-      if (screen === 'karaoke_score' && karaokePhase === 'result') {
-        if (e.key === 'Enter') {
-          setKaraokePhase('name');
-          e.preventDefault();
-        }
+      if (screen === 'karaoke_score' && karaokePhase !== 'name') {
+        // Durante a pontuação/final/rank, não deixa ENTER, G, ESC ou outros comandos
+        // tirarem a tela antes do tempo programado.
+        e.preventDefault();
         return;
       }
 
@@ -1198,6 +1270,8 @@ export default function App() {
           e.preventDefault();
           return;
         }
+        e.preventDefault();
+        return;
       }
 
       // Teclas de atalho globais
@@ -1496,8 +1570,10 @@ export default function App() {
               }
 
               if (state === 0 || state === (window as any).YT?.PlayerState?.ENDED) {
+                if (karaokeFinishLockRef.current || screenRef.current === 'karaoke_score') {
+                  return;
+                }
                 if (karaokeModeActiveRef.current) {
-                  setKaraokeModeActive(false);
                   finishKaraokeSong();
                   return;
                 }
@@ -2211,8 +2287,10 @@ export default function App() {
                    autoPlay
                    controls={false}
                    onEnded={() => {
+                     if (karaokeFinishLockRef.current || screenRef.current === 'karaoke_score') {
+                       return;
+                     }
                      if (karaokeModeActiveRef.current) {
-                       setKaraokeModeActive(false);
                        finishKaraokeSong();
                        return;
                      }
@@ -2308,13 +2386,8 @@ export default function App() {
               {karaokePhase === 'result' && (
                 <div className="p-5 md:p-7 bg-zinc-950 border-t border-zinc-800">
                   <h2 className="text-white font-black uppercase tracking-[0.2em] text-xs mb-3">Resultado pronto</h2>
-                  <p className="text-zinc-400 text-sm mb-5">Aperte <b className="text-brand-red">ENTER</b> para digitar o nome e salvar no Rank.</p>
-                  <button
-                    onClick={() => setKaraokePhase('name')}
-                    className="bg-brand-red px-10 py-4 rounded-2xl font-black uppercase tracking-widest text-xs shadow-xl shadow-brand-red/20"
-                  >
-                    Continuar para o Rank
-                  </button>
+                  <p className="text-zinc-400 text-sm mb-2">A nota final fica na tela por <b className="text-brand-red">15 segundos</b>.</p>
+                  <p className="text-zinc-500 text-xs uppercase tracking-widest">Depois disso abre o rank automaticamente.</p>
                 </div>
               )}
 
@@ -2353,18 +2426,12 @@ export default function App() {
                       </div>
                     ))}
                   </div>
+                  <p className="text-zinc-500 text-xs uppercase tracking-widest mt-5">Voltando ao catálogo automaticamente em 15 segundos...</p>
                   <button
-                    onClick={() => {
-                      karaokeFinishLockRef.current = false;
-                      activeKaraokeSongRef.current = null;
-                      setKaraokeModeActive(false);
-                      setCurrentPlaying(null);
-                      stopScoringSound();
-                      setScreen('genres');
-                    }}
-                    className="mt-6 bg-brand-red px-10 py-4 rounded-2xl font-black uppercase tracking-widest text-xs shadow-xl shadow-brand-red/20"
+                    onClick={returnFromKaraokeToGenres}
+                    className="mt-4 bg-brand-red px-10 py-4 rounded-2xl font-black uppercase tracking-widest text-xs shadow-xl shadow-brand-red/20"
                   >
-                    Voltar ao catálogo
+                    Voltar ao catálogo agora
                   </button>
                 </div>
               )}

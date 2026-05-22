@@ -1,26 +1,25 @@
-Correção MajuBox Web - Sons e pontuação do Karaokê
+Correção do fluxo de pontuação do Karaokê - MajuBox Web
 
-Substitua/adicone estes arquivos no seu projeto web:
+Trocar/subir estes arquivos no seu projeto web:
 
-1) Troque:
-   src/App.tsx
+src/App.tsx
+public/sounds/creditos.mp3
+public/sounds/pontuacao-karaoke.mp3
+public/sounds/paumas.mp3
 
-2) Crie a pasta, se não existir:
-   public/sounds/
+O que foi corrigido:
+- Ao terminar a música no gênero Karaokê, o sistema não volta mais para Gêneros antes da pontuação.
+- Bloqueia os eventos repetidos do player do YouTube que faziam a tela de pontuação ficar em segundo plano.
+- Os números da pontuação rodam por 10 segundos.
+- Depois aparece a nota final e ela fica fixa na tela por 15 segundos.
+- ENTER, G, ESC e outros comandos não pulam a pontuação enquanto ela está na tela.
+- Depois dos 15 segundos, se a pontuação entrar no Top 10, abre o teclado do nome.
+- Na tela de digitar nome, não sai sozinho: só sai depois de confirmar em OK.
+- Após salvar o nome, mostra o ranking Top 10 por 15 segundos.
+- Depois dos 15 segundos no ranking, volta para Gêneros automaticamente.
 
-3) Coloque dentro dela:
-   public/sounds/creditos.mp3
-   public/sounds/pontuacao-karaoke.mp3
-   public/sounds/paumas.mp3
+Depois de substituir os arquivos, rode:
 
-Depois rode:
-   npm run build
+npm run build
 
-E suba no Render.
-
-Alterações feitas:
-- Som de créditos ao adicionar créditos por PIX, tecla 6 e tecla P.
-- Som de pontuação enquanto os números giram.
-- Números da pontuação giram por 10 segundos.
-- Após mostrar a pontuação final, só avança para digitar o nome/rank quando apertar ENTER ou clicar no botão.
-- Palmas após pontuação alta/normal; nota 01 sem microfone usa som de vaia sintetizado.
+Depois suba no Render.
