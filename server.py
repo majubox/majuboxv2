@@ -78,6 +78,17 @@ def _is_probable_short_video(video):
         return True
     return False
 
+
+def _normalize_song_title_for_duplicate(title):
+    """Normaliza título para evitar repetidos no Karaokê entre canais diferentes."""
+    title = str(title or "").lower()
+    title = re.sub(r"\([^)]*\)", " ", title)
+    title = re.sub(r"\[[^\]]*\]", " ", title)
+    title = re.sub(r"\b(karaok[eê]|karaoke|oficial|official|lyrics?|letra|legendado|hd|4k|ao vivo|live|cover|playback|instrumental)\b", " ", title)
+    title = re.sub(r"[^a-z0-9áàâãéêíóôõúçñ]+", " ", title)
+    title = re.sub(r"\s+", " ", title).strip()
+    return title
+
 def _load_saved_youtube_key():
     """Carrega a chave da API do YouTube salva no painel admin, se existir."""
     global YOUTUBE_API_KEY
@@ -231,6 +242,17 @@ def init_db():
             terms_hash      TEXT,
             ip              TEXT,
             user_agent      TEXT,
+            created_at      TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS karaoke_scores (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            machine_id      TEXT,
+            hwid            TEXT,
+            token           TEXT,
+            name            TEXT NOT NULL,
+            score           INTEGER NOT NULL,
+            song_title      TEXT,
             created_at      TEXT DEFAULT (datetime('now'))
         );
         """)
@@ -960,6 +982,95 @@ def machine_terms_accept():
         "terms_version": terms_version,
         "accepted_at": accepted_at
     })
+
+
+@app.route("/machine/karaoke/score", methods=["POST", "OPTIONS"])
+@app.route("/api/machine/karaoke/score", methods=["POST", "OPTIONS"])
+@app.route("/proxy/karaoke/score", methods=["POST", "OPTIONS"])
+@app.route("/api/proxy/karaoke/score", methods=["POST", "OPTIONS"])
+def machine_karaoke_score():
+    """Salva pontuação de karaokê enviada pela máquina/web."""
+    if request.method == "OPTIONS":
+        return jsonify({"ok": True})
+
+    d = request.json or {}
+    token = (d.get("token") or "").strip()
+    hwid = (d.get("hwid") or "").strip()
+    name = (d.get("name") or "CANTOR").strip().upper()[:12]
+    song_title = (d.get("song_title") or d.get("song") or "Karaokê").strip()[:200]
+    try:
+        score = int(d.get("score", 1) or 1)
+    except Exception:
+        score = 1
+    score = max(1, min(99, score))
+
+    with get_db() as db:
+        machine = None
+        if token:
+            machine = db.execute("SELECT id FROM machines WHERE token=?", (token,)).fetchone()
+        if not machine and hwid:
+            machine = db.execute("SELECT id FROM machines WHERE hwid=?", (hwid,)).fetchone()
+        machine_id = machine["id"] if machine else None
+
+        db.execute("""
+            INSERT INTO karaoke_scores(machine_id,hwid,token,name,score,song_title)
+            VALUES(?,?,?,?,?,?)
+        """, (machine_id, hwid, token, name, score, song_title))
+        db.commit()
+
+        rows = [dict(r) for r in db.execute("""
+            SELECT name, score, song_title, created_at
+            FROM karaoke_scores
+            WHERE COALESCE(hwid,'')=COALESCE(?, COALESCE(hwid,''))
+            ORDER BY score DESC, created_at DESC
+            LIMIT 10
+        """, (hwid,)).fetchall()]
+
+    return jsonify({"ok": True, "ranking": rows})
+
+
+@app.route("/machine/karaoke/ranking", methods=["GET", "POST", "OPTIONS"])
+@app.route("/api/machine/karaoke/ranking", methods=["GET", "POST", "OPTIONS"])
+@app.route("/proxy/karaoke/ranking", methods=["GET", "POST", "OPTIONS"])
+@app.route("/api/proxy/karaoke/ranking", methods=["GET", "POST", "OPTIONS"])
+def machine_karaoke_ranking():
+    if request.method == "OPTIONS":
+        return jsonify({"ok": True})
+    d = request.json or {}
+    hwid = (request.args.get("hwid") or d.get("hwid") or "").strip()
+    with get_db() as db:
+        if hwid:
+            rows = [dict(r) for r in db.execute("""
+                SELECT name, score, song_title, created_at
+                FROM karaoke_scores
+                WHERE hwid=?
+                ORDER BY score DESC, created_at DESC
+                LIMIT 10
+            """, (hwid,)).fetchall()]
+        else:
+            rows = [dict(r) for r in db.execute("""
+                SELECT name, score, song_title, created_at
+                FROM karaoke_scores
+                ORDER BY score DESC, created_at DESC
+                LIMIT 10
+            """).fetchall()]
+    return jsonify({"ok": True, "ranking": rows})
+
+
+
+@app.route("/admin/api/karaoke/ranking", methods=["GET"])
+def admin_karaoke_ranking():
+    err = require_admin()
+    if err: return err
+    with get_db() as db:
+        rows = [dict(r) for r in db.execute("""
+            SELECT ks.*, m.name AS machine_name
+            FROM karaoke_scores ks
+            LEFT JOIN machines m ON m.id=ks.machine_id
+            ORDER BY ks.score DESC, ks.created_at DESC
+            LIMIT 200
+        """).fetchall()]
+    return jsonify({"ok": True, "ranking": rows})
 
 @app.route("/admin/api/terms_acceptance", methods=["GET"])
 def admin_terms_acceptance():
@@ -2810,10 +2921,27 @@ def _import_youtube_channel_to_db(genre_id, channel_url, dvd_name_input="", arti
             if not youtube_id:
                 skipped += 1
                 continue
+            # Regra especial para Karaokê: não repetir a mesma música mesmo que venha de outro canal.
+            genre_name_norm = str(genre["name"] or "").lower()
+            title_norm = _normalize_song_title_for_duplicate(video.get("title", ""))
+            if "karaok" in genre_name_norm and title_norm:
+                existing_titles = db.execute("SELECT title FROM playlists WHERE genre_id=?", (genre_id,)).fetchall()
+                if any(_normalize_song_title_for_duplicate(row["title"]) == title_norm for row in existing_titles):
+                    duplicated += 1
+                    continue
+
             exists = db.execute("SELECT id FROM playlists WHERE youtube_id=? AND dvd_id=? LIMIT 1", (youtube_id, dvd_id)).fetchone()
             if exists:
                 duplicated += 1
                 continue
+            genre_row = db.execute("SELECT name FROM genres WHERE id=?", (genre_id,)).fetchone()
+            if genre_row and "karaok" in str(genre_row["name"] or "").lower():
+                title_norm = _normalize_song_title_for_duplicate(video.get("title", ""))
+                existing_titles = db.execute("SELECT title FROM playlists WHERE genre_id=?", (genre_id,)).fetchall()
+                if title_norm and any(_normalize_song_title_for_duplicate(row["title"]) == title_norm for row in existing_titles):
+                    skipped += 1
+                    continue
+
             inserted += 1
             db.execute(
                 "INSERT INTO playlists(genre_id,dvd_id,title,artist,youtube_id,video_url,cover_url,mode,sort_order) VALUES(?,?,?,?,?,?,?,?,?)",
@@ -2838,9 +2966,14 @@ def _import_youtube_channel_to_db(genre_id, channel_url, dvd_name_input="", arti
     }
 
 
-@app.route("/api/machine/genres", methods=["POST", "GET"])
+@app.route("/machine/genres", methods=["POST", "GET", "OPTIONS"])
+@app.route("/proxy/genres", methods=["POST", "GET", "OPTIONS"])
+@app.route("/api/machine/genres", methods=["POST", "GET", "OPTIONS"])
+@app.route("/api/proxy/genres", methods=["POST", "GET", "OPTIONS"])
 def machine_genres_list():
     """Lista gêneros para a máquina escolher ao adicionar DVD."""
+    if request.method == "OPTIONS":
+        return jsonify({"ok": True, "genres": []})
     with get_db() as db:
         rows = [dict(r) for r in db.execute("SELECT id,name,cover_url,sort_order FROM genres ORDER BY sort_order,name").fetchall()]
     for g in rows:
@@ -2848,8 +2981,11 @@ def machine_genres_list():
     return jsonify({"ok": True, "genres": rows})
 
 
-@app.route("/api/machine/youtube/import_channel", methods=["POST"])
+@app.route("/machine/youtube/import_channel", methods=["POST", "OPTIONS"])
+@app.route("/api/machine/youtube/import_channel", methods=["POST", "OPTIONS"])
 def machine_youtube_import_channel():
+    if request.method == "OPTIONS":
+        return jsonify({"ok": True})
     """Permite que qualquer máquina autorizada adicione um DVD global pelo canal do YouTube.
     Usa a YouTube API key configurada no servidor. O DVD e as músicas ficam salvos no servidor
     e aparecem para todas as máquinas no próximo atualizar/conectar.
@@ -2881,7 +3017,8 @@ def machine_youtube_import_channel():
     return jsonify(result), status
 
 # Compatibilidade para app/web que use /api/proxy
-@app.route("/api/proxy/youtube/import_channel", methods=["POST"])
+@app.route("/proxy/youtube/import_channel", methods=["POST", "OPTIONS"])
+@app.route("/api/proxy/youtube/import_channel", methods=["POST", "OPTIONS"])
 def proxy_machine_youtube_import_channel():
     return machine_youtube_import_channel()
 

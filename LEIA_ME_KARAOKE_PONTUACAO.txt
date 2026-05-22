@@ -1,0 +1,31 @@
+MajuBox v2 - Karaokê com Pontuação
+
+ALTERAÇÕES FEITAS:
+- Sistema de pontuação ativo somente quando o gênero escolhido for Karaokê/Karaoke.
+- Ao terminar a música, aparece tela de pontuação com números rodando de 01 a 99.
+- Usa microfone para calcular:
+  * se não detectar voz/áudio: nota 01
+  * se detectar voz: nota mínima 20, podendo ir até 99
+- Som de tambor durante a rolagem da nota.
+- Nota alta toca som de aplausos.
+- Nota baixa toca som de vaia.
+- Depois da pontuação abre teclado virtual para digitar nome.
+- Teclado virtual funciona por setas e Enter e só aparece na tela de ranking do karaokê.
+- Rank local Top 10 salvo no app.
+- Servidor recebe pontuação em /machine/karaoke/score e tem /machine/karaoke/ranking.
+- Importação de canal no gênero Karaokê tenta bloquear músicas repetidas pelo título normalizado.
+- Mantidas as funções já existentes do web e do servidor.
+
+IMPORTANTE:
+- Para o microfone funcionar no navegador/Android, precisa permitir acesso ao microfone.
+- No Android/APK, se usar Capacitor, confira no AndroidManifest.xml a permissão:
+  <uses-permission android:name="android.permission.RECORD_AUDIO" />
+- O gênero precisa ter nome contendo Karaokê ou Karaoke para ativar a pontuação.
+
+Render WEB:
+Build Command: npm install --include=dev && npx vite build
+Publish Directory: dist
+
+Render SERVIDOR PYTHON:
+Build Command: pip install -r requirements.txt
+Start Command: python server.py
