@@ -377,8 +377,6 @@ export default function App() {
       return [];
     }
   });
-  const activeKaraokeSongRef = useRef<Song | null>(null);
-  const karaokeFinishLockRef = useRef(false);
   const micStreamRef = useRef<MediaStream | null>(null);
   const micAudioContextRef = useRef<AudioContext | null>(null);
   const micAnalyserRef = useRef<AnalyserNode | null>(null);
@@ -532,25 +530,10 @@ export default function App() {
     return `${cleanBase}${cleanPath}`;
   }, [serverUrl]);
 
-  const isKaraokeText = useCallback((value?: string | null) => {
-    const n = (value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-    // Aceita Karaoke, Karaokê, Karaok, Karaok� e variações comuns
-    return n.includes("karaoke") || n.includes("karaok") || n.includes("kara");
-  }, []);
-
   const isKaraokeGenre = useCallback((genre?: Genre | null) => {
-    return isKaraokeText(genre?.name);
-  }, [isKaraokeText]);
-
-  const isKaraokeContext = useCallback((song?: Song | null) => {
-    return (
-      isKaraokeGenre(selectedGenre) ||
-      isKaraokeText(selectedDVD?.name) ||
-      isKaraokeText(selectedDVD?.dvd_name) ||
-      isKaraokeText(song?.title) ||
-      isKaraokeText(song?.artist)
-    );
-  }, [isKaraokeGenre, isKaraokeText, selectedDVD, selectedGenre]);
+    const n = (genre?.name || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    return n.includes("karaoke") || n.includes("karaoke");
+  }, []);
 
   const playSimpleTone = useCallback((type: 'drum' | 'applause' | 'boo') => {
     try {
@@ -667,8 +650,6 @@ export default function App() {
   }, []);
 
   const finishKaraokeSong = useCallback(() => {
-    if (karaokeFinishLockRef.current) return;
-    karaokeFinishLockRef.current = true;
     const score = stopMicScoringAndGetScore();
     setKaraokeScore(score);
     setKaraokeDisplayScore(1);
@@ -700,7 +681,7 @@ export default function App() {
     const entry = {
       name,
       score: karaokeScore,
-      song: activeKaraokeSongRef.current?.title || currentPlayingRef.current?.title || "Karaokê",
+      song: currentPlayingRef.current?.title || "Karaokê",
       date: new Date().toISOString()
     };
     const nextRank = [...karaokeRank, entry]
@@ -709,7 +690,6 @@ export default function App() {
     setKaraokeRank(nextRank);
     localStorage.setItem("MajuBox_KaraokeRank", JSON.stringify(nextRank));
     setKaraokePhase('saved');
-    karaokeFinishLockRef.current = false;
     try {
       await api.post(getFullUrl('/machine/karaoke/score'), {
         hwid,
@@ -736,29 +716,6 @@ export default function App() {
   useEffect(() => {
     karaokeModeActiveRef.current = karaokeModeActive;
   }, [karaokeModeActive]);
-
-  useEffect(() => {
-    if (screen !== 'playing' || !karaokeModeActive || !currentPlaying) return;
-
-    const timer = window.setInterval(() => {
-      try {
-        const player = ytPlayerRef.current;
-        if (!player || typeof player.getPlayerState !== 'function') return;
-
-        const state = player.getPlayerState();
-        const current = typeof player.getCurrentTime === 'function' ? player.getCurrentTime() : 0;
-        const duration = typeof player.getDuration === 'function' ? player.getDuration() : 0;
-
-        if (state === 0 || (duration > 15 && current > 5 && duration - current <= 1.5)) {
-          setKaraokeModeActive(false);
-          karaokeModeActiveRef.current = false;
-          finishKaraokeSong();
-        }
-      } catch {}
-    }, 700);
-
-    return () => window.clearInterval(timer);
-  }, [screen, karaokeModeActive, currentPlaying, finishKaraokeSong]);
 
   // --- Initial Loading ---
   useEffect(() => {
@@ -1444,7 +1401,7 @@ export default function App() {
                 }
               }
 
-              if (state === 0 || state === (window as any).YT?.PlayerState?.ENDED) {
+              if (state === (window as any).YT.PlayerState.ENDED) {
                 if (karaokeModeActiveRef.current) {
                   setKaraokeModeActive(false);
                   finishKaraokeSong();
@@ -1596,11 +1553,8 @@ export default function App() {
     setPreviewSong(null);
     
     if (!currentPlaying) {
-      const shouldScoreKaraoke = isKaraokeContext(song);
+      const shouldScoreKaraoke = isKaraokeGenre(selectedGenre);
       setKaraokeModeActive(shouldScoreKaraoke);
-      karaokeModeActiveRef.current = shouldScoreKaraoke;
-      karaokeFinishLockRef.current = false;
-      activeKaraokeSongRef.current = shouldScoreKaraoke ? song : null;
       if (shouldScoreKaraoke) {
         startMicScoring();
       }
@@ -2199,7 +2153,7 @@ export default function App() {
             {!currentPlaying?.youtube_id && (
               <div className="p-8 bg-brand-dark flex items-center justify-around border-t border-zinc-900 relative z-50">
                   <button 
-                    onClick={() => { karaokeFinishLockRef.current = false; activeKaraokeSongRef.current = null; setKaraokeModeActive(false); setCurrentPlaying(null); setScreen('genres'); }}
+                    onClick={() => { setKaraokeModeActive(false); setCurrentPlaying(null); setScreen('genres'); }}
                     className="flex flex-col items-center gap-2"
                   >
                     <div className="w-16 h-16 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center text-white active:bg-brand-red active:border-brand-red transition-all">
@@ -2291,8 +2245,6 @@ export default function App() {
                   </div>
                   <button
                     onClick={() => {
-                      karaokeFinishLockRef.current = false;
-                      activeKaraokeSongRef.current = null;
                       setKaraokeModeActive(false);
                       setCurrentPlaying(null);
                       setScreen('genres');
