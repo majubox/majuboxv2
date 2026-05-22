@@ -346,7 +346,10 @@ export default function App() {
   const [previewTimer, setPreviewTimer] = useState(0);
   const [queue, setQueue] = useState<Song[]>([]);
   const [credits, setCredits] = useState(0);
+  // totalRevenue = entradas por PIX. cashRevenue = dinheiro/créditos colocados manualmente na máquina.
   const [totalRevenue, setTotalRevenue] = useState(0);
+  const [cashRevenue, setCashRevenue] = useState(0);
+  const getTotalRevenue = () => Number((totalRevenue + cashRevenue).toFixed(2));
   const [tapCount, setTapCount] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [pixData, setPixData] = useState<any>(null);
@@ -428,6 +431,15 @@ export default function App() {
   const playCreditSound = useCallback(() => {
     playAudioAsset('/sounds/creditos.mp3', { volume: 1 });
   }, [playAudioAsset]);
+
+  const addManualCredits = useCallback((amountCredits = 1) => {
+    const creditsToAdd = Math.max(1, Number(amountCredits) || 1);
+    const moneyToAdd = creditsToAdd / 2; // regra da máquina: 2 créditos = R$ 1,00
+    setCredits(prev => prev + creditsToAdd);
+    setCashRevenue(prev => Number((prev + moneyToAdd).toFixed(2)));
+    playCreditSound();
+    logDebug(`${creditsToAdd} crédito(s) manual(is) inserido(s) = R$ ${moneyToAdd.toFixed(2)}`);
+  }, [playCreditSound, logDebug]);
 
   const recordTermsAcceptance = useCallback(async () => {
     const acceptedAt = new Date().toISOString();
@@ -891,7 +903,9 @@ export default function App() {
           setMpTokenInput(config.mpToken);
         }
         if (config.credits !== undefined) setCredits(config.credits);
-        if (config.revenue !== undefined) setTotalRevenue(config.revenue);
+        if (config.pixRevenue !== undefined) setTotalRevenue(config.pixRevenue);
+        else if (config.revenue !== undefined) setTotalRevenue(config.revenue);
+        if (config.cashRevenue !== undefined) setCashRevenue(config.cashRevenue);
         logDebug("Configurações carregadas da memória.");
       }
       setIsConfigLoaded(true);
@@ -902,24 +916,22 @@ export default function App() {
   // Auto-save when values change
   useEffect(() => {
     if (isConfigLoaded) {
-      saveConfig({ serverUrl, token, mpToken, credits, revenue: totalRevenue });
+      saveConfig({ serverUrl, token, mpToken, credits, revenue: totalRevenue, pixRevenue: totalRevenue, cashRevenue });
     }
-  }, [serverUrl, token, mpToken, credits, totalRevenue, isConfigLoaded]);
+  }, [serverUrl, token, mpToken, credits, totalRevenue, cashRevenue, isConfigLoaded]);
 
   // Teclas de atalho para Smart TV / Controles
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Tecla "6" para inserir crédito manual
       if (e.key === '6') {
-        setCredits(prev => prev + 1);
-        playCreditSound();
-        logDebug("Crédito manual inserido via tecla 6");
+        addManualCredits(1);
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [logDebug, playCreditSound]);
+  }, [addManualCredits]);
 
   // Idle / Attract Mode logic
   const [lastInteraction, setLastInteraction] = useState(Date.now());
@@ -1292,11 +1304,11 @@ export default function App() {
         return;
       }
       if (e.key === 'p' || e.key === 'P') {
-        const amount = 2;
-        setCredits(prev => prev + amount);
-        playCreditSound();
-        // Notificar server
-        api.post('/api/machine/add_credits', { hwid, token, amount, type: 'manual' }).catch(() => {});
+        const amountCredits = 2;
+        const amountMoney = amountCredits / 2;
+        addManualCredits(amountCredits);
+        // Notificar server separando dinheiro/manual do PIX
+        api.post('/api/machine/add_credits', { hwid, token, credits: amountCredits, amount: amountMoney, type: 'manual' }).catch(() => {});
         return;
       }
 
@@ -1383,7 +1395,7 @@ export default function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [screen, genres, selectedGenre, selectedDVD, cursorIndex, previewSong, credits, karaokePhase, karaokeKeyboardIndex, karaokeName, handleKaraokeKey, playCreditSound]);
+  }, [screen, genres, selectedGenre, selectedDVD, cursorIndex, previewSong, credits, karaokePhase, karaokeKeyboardIndex, karaokeName, handleKaraokeKey, addManualCredits]);
 
   // Scroll automático
   useEffect(() => {
@@ -1779,8 +1791,9 @@ export default function App() {
   };
 
   const resetRevenue = () => {
-    if (confirm("Deseja zerar o contador de arrecadação?")) {
+    if (confirm("Deseja zerar o contador de arrecadação? Isso zera o dinheiro/manual e o PIX, mas não zera créditos atuais.")) {
       setTotalRevenue(0);
+      setCashRevenue(0);
     }
   };
 
@@ -1793,7 +1806,7 @@ export default function App() {
     setToken(tokenInput);
     setMpToken(mpTokenInput);
     
-    saveConfig({ serverUrl: serverUrlInput, token: tokenInput, mpToken: mpTokenInput, credits, revenue: totalRevenue });
+    saveConfig({ serverUrl: serverUrlInput, token: tokenInput, mpToken: mpTokenInput, credits, revenue: totalRevenue, pixRevenue: totalRevenue, cashRevenue });
     
     // Save info to server (Handshake/Sync)
     try {
@@ -2730,7 +2743,9 @@ export default function App() {
                 <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest pl-1">Informações do Dispositivo</h3>
                 <div className="grid grid-cols-2 gap-4">
                   <AdminItem label="Hardware ID" value={hwid.substring(0, 12)} />
-                  <AdminItem label="Arrecadação" value={`R$ ${totalRevenue.toFixed(2)}`} />
+                  <AdminItem label="Dinheiro Manual" value={`R$ ${cashRevenue.toFixed(2)}`} />
+                  <AdminItem label="PIX" value={`R$ ${totalRevenue.toFixed(2)}`} />
+                  <AdminItem label="Total Geral" value={`R$ ${getTotalRevenue().toFixed(2)}`} />
                 </div>
                 
                 <div className="p-4 bg-zinc-900/50 rounded-2xl border border-zinc-900 text-[10px] space-y-2">
@@ -2796,8 +2811,16 @@ export default function App() {
                
                <div className="grid grid-cols-1 gap-4 text-left mb-10">
                   <div className="p-5 bg-zinc-900 rounded-3xl border border-zinc-800 flex justify-between items-center">
+                    <span className="text-zinc-500 font-bold text-xs uppercase">Dinheiro Manual</span>
+                    <span className="text-2xl font-black text-yellow-400">R$ {cashRevenue.toFixed(2)}</span>
+                  </div>
+                  <div className="p-5 bg-zinc-900 rounded-3xl border border-zinc-800 flex justify-between items-center">
                     <span className="text-zinc-500 font-bold text-xs uppercase">Entradas R$ (PIX)</span>
                     <span className="text-2xl font-black text-emerald-400">R$ {totalRevenue.toFixed(2)}</span>
+                  </div>
+                  <div className="p-5 bg-zinc-900 rounded-3xl border border-zinc-800 flex justify-between items-center">
+                    <span className="text-zinc-500 font-bold text-xs uppercase">Total Geral</span>
+                    <span className="text-2xl font-black text-white">R$ {getTotalRevenue().toFixed(2)}</span>
                   </div>
                   <div className="p-5 bg-zinc-900 rounded-3xl border border-zinc-800 flex justify-between items-center">
                     <span className="text-zinc-500 font-bold text-xs uppercase">Créditos em Máquina</span>
